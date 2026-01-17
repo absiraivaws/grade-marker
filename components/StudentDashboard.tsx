@@ -66,9 +66,21 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
     }
   };
 
-  const sortedAssignments = useMemo(() => {
-    return [...assignments].sort((a, b) => b.createdAt - a.createdAt);
-  }, [assignments]);
+  const { pendingAssignments, completedAssignments } = useMemo(() => {
+    const sorted = [...assignments].sort((a, b) => b.createdAt - a.createdAt);
+    const pending: Assignment[] = [];
+    const completed: Assignment[] = [];
+    
+    sorted.forEach(a => {
+      if (submissions.some(s => s.assignmentId === a.id)) {
+        completed.push(a);
+      } else {
+        pending.push(a);
+      }
+    });
+    
+    return { pendingAssignments: pending, completedAssignments: completed };
+  }, [assignments, submissions]);
 
   const renderBreakdownItem = (point: string, score: number, max: number, idx: number) => {
     const isFull = score === max;
@@ -85,64 +97,88 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
     );
   };
 
-  return (
-    <div className="space-y-8">
-      <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Available Assignments</h2>
-      
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {sortedAssignments.map(a => {
-          const mySub = submissions.find(s => s.assignmentId === a.id);
-          return (
-            <div key={a.id} className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm flex flex-col transition-all hover:shadow-md">
-              <div className="p-6 flex-1">
-                <div className="flex justify-between items-start mb-4">
-                  <h3 className="text-xl font-bold text-slate-800 dark:text-white">{a.title}</h3>
-                  {mySub ? (
-                    <span className="bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
-                      Completed
-                    </span>
-                  ) : (
-                    <span className="bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
-                      Pending
-                    </span>
-                  )}
+  const renderAssignmentCard = (a: Assignment) => {
+    const mySub = submissions.find(s => s.assignmentId === a.id);
+    return (
+      <div key={a.id} className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm flex flex-col transition-all hover:shadow-md">
+        <div className="p-6 flex-1">
+          <div className="flex justify-between items-start mb-4">
+            <h3 className="text-xl font-bold text-slate-800 dark:text-white">{a.title}</h3>
+            {mySub ? (
+              <span className="bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
+                Completed
+              </span>
+            ) : (
+              <span className="bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
+                Pending
+              </span>
+            )}
+          </div>
+          <p className="text-slate-600 dark:text-slate-400 mb-6">{a.question}</p>
+          {mySub && (
+            <div className="space-y-4">
+              <div className="bg-indigo-50 dark:bg-indigo-950/20 p-4 rounded-xl border dark:border-indigo-900/30">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-indigo-800 dark:text-indigo-300 font-bold">Your Grade:</span>
+                  <span className="text-2xl font-black text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
+                    {mySub.score} / {mySub.maxScore}
+                  </span>
                 </div>
-                <p className="text-slate-600 dark:text-slate-400 mb-6">{a.question}</p>
-                {mySub && (
-                  <div className="space-y-4">
-                    <div className="bg-indigo-50 dark:bg-indigo-950/20 p-4 rounded-xl border dark:border-indigo-900/30">
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-indigo-800 dark:text-indigo-300 font-bold">Your Grade:</span>
-                        <span className="text-2xl font-black text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
-                          {mySub.score} / {mySub.maxScore}
-                        </span>
-                      </div>
-                      <p className="text-sm text-indigo-700 dark:text-indigo-300 italic mb-4">" {mySub.feedback} "</p>
-                      
-                      <div className="border-t dark:border-indigo-900/50 pt-4">
-                        <h4 className="text-xs font-bold uppercase tracking-widest text-indigo-400 mb-3">Breakdown</h4>
-                        <div className="space-y-2">
-                          {a.markingPoints.map((mp, idx) => 
-                            renderBreakdownItem(mp.point, mySub.criteriaScores?.[idx] ?? 0, mp.weight, idx)
-                          )}
-                        </div>
-                      </div>
-                    </div>
+                <p className="text-sm text-indigo-700 dark:text-indigo-300 italic mb-4">" {mySub.feedback} "</p>
+                
+                <div className="border-t dark:border-indigo-900/50 pt-4">
+                  <h4 className="text-xs font-bold uppercase tracking-widest text-indigo-400 mb-3">Breakdown</h4>
+                  <div className="space-y-2">
+                    {a.markingPoints.map((mp, idx) => 
+                      renderBreakdownItem(mp.point, mySub.criteriaScores?.[idx] ?? 0, mp.weight, idx)
+                    )}
                   </div>
-                )}
+                </div>
               </div>
-              {!mySub && (
-                <button 
-                  onClick={() => setSelectedAssignment(a)}
-                  className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition-colors"
-                >
-                  Submit Answer
-                </button>
-              )}
             </div>
-          );
-        })}
+          )}
+        </div>
+        {!mySub && (
+          <button 
+            onClick={() => setSelectedAssignment(a)}
+            className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition-colors"
+          >
+            Submit Answer
+          </button>
+        )}
       </div>
+    );
+  };
+
+  return (
+    <div className="space-y-12">
+      {/* PENDING SECTION */}
+      <section className="space-y-6">
+        <h2 className="text-xl font-black text-slate-400 uppercase tracking-[0.2em]">Pending</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {pendingAssignments.length > 0 ? (
+            pendingAssignments.map(renderAssignmentCard)
+          ) : (
+            <div className="col-span-full py-12 text-center border-2 border-dashed dark:border-slate-800 rounded-2xl bg-slate-50/50 dark:bg-slate-900/30">
+              <p className="text-slate-400">All caught up! No pending assignments.</p>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* COMPLETED SECTION */}
+      <section className="space-y-6">
+        <h2 className="text-xl font-black text-slate-400 uppercase tracking-[0.2em]">Completed</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {completedAssignments.length > 0 ? (
+            completedAssignments.map(renderAssignmentCard)
+          ) : (
+            <div className="col-span-full py-12 text-center border-2 border-dashed dark:border-slate-800 rounded-2xl bg-slate-50/50 dark:bg-slate-900/30">
+              <p className="text-slate-400">No completed assignments yet.</p>
+            </div>
+          )}
+        </div>
+      </section>
 
       {lastSubmissionResult && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md flex items-center justify-center z-[70] p-4">
