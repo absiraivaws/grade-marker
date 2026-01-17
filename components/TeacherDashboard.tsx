@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Assignment, Submission, MarkingCriterion } from '../types';
 import { extractMarkingPoints } from '../services/geminiService';
 
@@ -17,6 +17,10 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
   const [selectedSubmission, setSelectedSubmission] = useState<Submission | null>(null);
   const [isEditingMarks, setIsEditingMarks] = useState(false);
   const [tempScores, setTempScores] = useState<number[]>([]);
+  
+  // Filtering states
+  const [filterAssignmentId, setFilterAssignmentId] = useState<string>('all');
+  const [filterStudentName, setFilterStudentName] = useState<string>('all');
   
   const [title, setTitle] = useState('');
   const [question, setQuestion] = useState('');
@@ -88,7 +92,6 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
     const assignment = assignments.find(a => a.id === selectedSubmission.assignmentId);
     if (!assignment) return;
 
-    // Initialize tempScores with existing scores or calculated scores from booleans
     const currentScores = selectedSubmission.criteriaScores 
       ? [...selectedSubmission.criteriaScores] 
       : (selectedSubmission.criteriasMet?.map((met, i) => met ? assignment.markingPoints[i].weight : 0) || new Array(assignment.markingPoints.length).fill(0));
@@ -132,6 +135,19 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
     return Array.from(new Set(options)).sort((a, b) => a - b);
   };
 
+  // Derived data for filters
+  const uniqueStudents = useMemo(() => {
+    return Array.from(new Set(submissions.map(s => s.studentName))).sort();
+  }, [submissions]);
+
+  const filteredSubmissions = useMemo(() => {
+    return submissions.filter(s => {
+      const matchesAssignment = filterAssignmentId === 'all' || s.assignmentId === filterAssignmentId;
+      const matchesStudent = filterStudentName === 'all' || s.studentName === filterStudentName;
+      return matchesAssignment && matchesStudent;
+    });
+  }, [submissions, filterAssignmentId, filterStudentName]);
+
   const getComparisonScores = () => {
     if (!selectedSubmission) return [];
     const assignment = assignments.find(a => a.id === selectedSubmission.assignmentId);
@@ -154,6 +170,117 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
         </button>
       </div>
 
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {assignments.map(a => {
+          const subCount = submissions.filter(s => s.assignmentId === a.id).length;
+          return (
+            <div 
+              key={a.id} 
+              onClick={() => setSelectedAssignment(a)}
+              className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-xl p-6 shadow-sm hover:shadow-md transition-all cursor-pointer group hover:border-indigo-300 dark:hover:border-indigo-500"
+            >
+              <div className="flex justify-between items-start mb-2">
+                <h3 className="font-bold text-lg text-slate-800 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400">{a.title}</h3>
+                <svg className="w-5 h-5 text-slate-300 dark:text-slate-600 group-hover:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
+              </div>
+              <p className="text-slate-500 dark:text-slate-400 text-sm line-clamp-2">{a.question}</p>
+              <div className="mt-4 flex items-center justify-between">
+                <span className="text-xs font-medium text-slate-400 dark:text-slate-500">Created {new Date(a.createdAt).toLocaleDateString()}</span>
+                <span className="px-3 py-1 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-400 text-xs font-bold rounded-full">{subCount} Submissions</span>
+              </div>
+            </div>
+          );
+        })}
+        {assignments.length === 0 && (
+          <div className="col-span-full py-20 text-center border-2 border-dashed dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900">
+            <p className="text-slate-400 dark:text-slate-500">No assignments created yet.</p>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-12">
+        <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
+          <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Recent Submissions</h2>
+          
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-tight">Assignment:</label>
+              <select 
+                value={filterAssignmentId} 
+                onChange={(e) => setFilterAssignmentId(e.target.value)}
+                className="bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 transition-shadow"
+              >
+                <option value="all">All Assignments</option>
+                {assignments.map(a => (
+                  <option key={a.id} value={a.id}>{a.title}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-tight">Student:</label>
+              <select 
+                value={filterStudentName} 
+                onChange={(e) => setFilterStudentName(e.target.value)}
+                className="bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 transition-shadow"
+              >
+                <option value="all">All Students</option>
+                {uniqueStudents.map(name => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-xl overflow-hidden shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead className="bg-slate-50 dark:bg-slate-800 border-b dark:border-slate-700">
+                <tr>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Student</th>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Assignment</th>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Score</th>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Status</th>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y dark:divide-slate-800">
+                {filteredSubmissions.map(s => {
+                  const assign = assignments.find(a => a.id === s.assignmentId);
+                  return (
+                    <tr key={s.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 group cursor-pointer" onClick={() => {
+                      setSelectedSubmission(s);
+                      setIsEditingMarks(false);
+                    }}>
+                      <td className="px-6 py-4 font-medium text-slate-800 dark:text-slate-200">{s.studentName}</td>
+                      <td className="px-6 py-4 text-slate-600 dark:text-slate-400">{assign?.title || 'Unknown'}</td>
+                      <td className="px-6 py-4 font-bold text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
+                        <span className="whitespace-nowrap">{s.score} / {s.maxScore}</span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded">Graded</span>
+                      </td>
+                      <td className="px-6 py-4 text-indigo-600 dark:text-indigo-400 font-semibold text-sm group-hover:underline text-right">
+                        Review Marks
+                      </td>
+                    </tr>
+                  );
+                })}
+                {filteredSubmissions.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-6 py-10 text-center text-slate-400 dark:text-slate-500">
+                      {submissions.length === 0 ? "No submissions yet." : "No results match your filters."}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* Modals remain the same logic, but ensure marks formatting in Review Modal */}
       {showAdd && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
           <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-8 shadow-2xl transition-colors border dark:border-slate-800">
@@ -365,7 +492,7 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                               </select>
                             ) : (
                               <span className={`text-sm font-bold whitespace-nowrap ${displayScore === mp.weight ? 'text-green-600 dark:text-green-400' : displayScore === 0 ? 'text-red-500' : 'text-amber-600'}`}>
-                                {displayScore} / {mp.weight}
+                                <span className="whitespace-nowrap">{displayScore} / {mp.weight}</span>
                               </span>
                             )}
                           </div>
@@ -382,79 +509,6 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
           </div>
         </div>
       )}
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {assignments.map(a => {
-          const subCount = submissions.filter(s => s.assignmentId === a.id).length;
-          return (
-            <div 
-              key={a.id} 
-              onClick={() => setSelectedAssignment(a)}
-              className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-xl p-6 shadow-sm hover:shadow-md transition-all cursor-pointer group hover:border-indigo-300 dark:hover:border-indigo-500"
-            >
-              <div className="flex justify-between items-start mb-2">
-                <h3 className="font-bold text-lg text-slate-800 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400">{a.title}</h3>
-                <svg className="w-5 h-5 text-slate-300 dark:text-slate-600 group-hover:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
-              </div>
-              <p className="text-slate-500 dark:text-slate-400 text-sm line-clamp-2">{a.question}</p>
-              <div className="mt-4 flex items-center justify-between">
-                <span className="text-xs font-medium text-slate-400 dark:text-slate-500">Created {new Date(a.createdAt).toLocaleDateString()}</span>
-                <span className="px-3 py-1 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-400 text-xs font-bold rounded-full">{subCount} Submissions</span>
-              </div>
-            </div>
-          );
-        })}
-        {assignments.length === 0 && (
-          <div className="col-span-full py-20 text-center border-2 border-dashed dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900">
-            <p className="text-slate-400 dark:text-slate-500">No assignments created yet.</p>
-          </div>
-        )}
-      </div>
-
-      <div className="mt-12">
-        <h2 className="text-2xl font-bold text-slate-800 dark:text-white mb-6">Recent Submissions</h2>
-        <div className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-xl overflow-hidden shadow-sm">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead className="bg-slate-50 dark:bg-slate-800 border-b dark:border-slate-700">
-                <tr>
-                  <th className="px-6 py-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Student</th>
-                  <th className="px-6 py-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Assignment</th>
-                  <th className="px-6 py-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Score</th>
-                  <th className="px-6 py-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Status</th>
-                  <th className="px-6 py-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y dark:divide-slate-800">
-                {submissions.map(s => {
-                  const assign = assignments.find(a => a.id === s.assignmentId);
-                  return (
-                    <tr key={s.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 group cursor-pointer" onClick={() => {
-                      setSelectedSubmission(s);
-                      setIsEditingMarks(false);
-                    }}>
-                      <td className="px-6 py-4 font-medium text-slate-800 dark:text-slate-200">{s.studentName}</td>
-                      <td className="px-6 py-4 text-slate-600 dark:text-slate-400">{assign?.title || 'Unknown'}</td>
-                      <td className="px-6 py-4 font-bold text-indigo-600 dark:text-indigo-400 whitespace-nowrap">{s.score} / {s.maxScore}</td>
-                      <td className="px-6 py-4">
-                        <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded">Graded</span>
-                      </td>
-                      <td className="px-6 py-4 text-indigo-600 dark:text-indigo-400 font-semibold text-sm group-hover:underline text-right">
-                        Review Marks
-                      </td>
-                    </tr>
-                  );
-                })}
-                {submissions.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="px-6 py-10 text-center text-slate-400 dark:text-slate-500">No submissions to show.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
     </div>
   );
 };
