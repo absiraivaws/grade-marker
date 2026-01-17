@@ -269,8 +269,8 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                 <div className="space-y-2">
                   {selectedAssignment.markingPoints.map((m, idx) => (
                     <div key={idx} className="flex justify-between items-center p-3 bg-indigo-50/50 dark:bg-indigo-950/20 rounded-lg border border-indigo-100 dark:border-indigo-900/30">
-                      <span className="text-slate-700 dark:text-slate-300">{m.point}</span>
-                      <span className="font-bold text-indigo-600 dark:text-indigo-400">+{m.weight}</span>
+                      <span className="text-slate-700 dark:text-slate-300 pr-4">{m.point}</span>
+                      <span className="font-bold text-indigo-600 dark:text-indigo-400 whitespace-nowrap">+{m.weight}</span>
                     </div>
                   ))}
                 </div>
@@ -301,7 +301,7 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                 <p className="text-sm text-slate-500 dark:text-slate-400">Submission Review</p>
               </div>
               <div className="ml-auto flex items-center gap-6">
-                <div className="text-4xl font-black text-indigo-600 dark:text-indigo-400">
+                <div className="text-4xl font-black text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
                   {isEditingMarks ? tempScores.reduce((a, b) => a + b, 0) : selectedSubmission.score} / {selectedSubmission.maxScore}
                 </div>
                 {!isEditingMarks ? (
@@ -347,26 +347,28 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                       const displayScore = isEditingMarks ? tempScores[idx] : currentAssignedScore;
                       
                       return (
-                        <div key={idx} className="w-full flex justify-between items-center p-4">
-                          <span className={`text-sm ${displayScore === 0 ? 'text-red-500' : 'text-slate-700 dark:text-slate-300'}`}>
+                        <div key={idx} className="w-full flex justify-between items-center p-4 gap-4">
+                          <span className={`text-sm flex-1 ${displayScore === 0 ? 'text-red-500' : 'text-slate-700 dark:text-slate-300'}`}>
                             {mp.point}
                           </span>
                           
-                          {isEditingMarks ? (
-                            <select 
-                              value={displayScore}
-                              onChange={(e) => handleTempMarkChange(idx, parseFloat(e.target.value))}
-                              className="bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-md p-1.5 text-sm font-bold text-indigo-600 dark:text-indigo-400 outline-none focus:ring-1 focus:ring-indigo-500"
-                            >
-                              {generateDropdownOptions(mp.weight).map(val => (
-                                <option key={val} value={val}>{val} marks</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <span className={`text-sm font-bold ${displayScore === mp.weight ? 'text-green-600 dark:text-green-400' : displayScore === 0 ? 'text-red-500' : 'text-amber-600'}`}>
-                              {displayScore} / {mp.weight}
-                            </span>
-                          )}
+                          <div className="flex-shrink-0 flex items-center gap-2 whitespace-nowrap">
+                            {isEditingMarks ? (
+                              <select 
+                                value={displayScore}
+                                onChange={(e) => handleTempMarkChange(idx, parseFloat(e.target.value))}
+                                className="bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-md p-1.5 text-sm font-bold text-indigo-600 dark:text-indigo-400 outline-none focus:ring-1 focus:ring-indigo-500"
+                              >
+                                {generateDropdownOptions(mp.weight).map(val => (
+                                  <option key={val} value={val}>{val} marks</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <span className={`text-sm font-bold whitespace-nowrap ${displayScore === mp.weight ? 'text-green-600 dark:text-green-400' : displayScore === 0 ? 'text-red-500' : 'text-amber-600'}`}>
+                                {displayScore} / {mp.weight}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       );
                     })}
@@ -433,7 +435,7 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                     }}>
                       <td className="px-6 py-4 font-medium text-slate-800 dark:text-slate-200">{s.studentName}</td>
                       <td className="px-6 py-4 text-slate-600 dark:text-slate-400">{assign?.title || 'Unknown'}</td>
-                      <td className="px-6 py-4 font-bold text-indigo-600 dark:text-indigo-400">{s.score} / {s.maxScore}</td>
+                      <td className="px-6 py-4 font-bold text-indigo-600 dark:text-indigo-400 whitespace-nowrap">{s.score} / {s.maxScore}</td>
                       <td className="px-6 py-4">
                         <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded">Graded</span>
                       </td>
