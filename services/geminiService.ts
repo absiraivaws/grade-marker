@@ -6,7 +6,7 @@ const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
 export const analyzeAnswer = async (
   assignment: Assignment,
-  studentAnswerBase64: string
+  studentAnswerImages: string[]
 ): Promise<AIResponse> => {
   const ai = getAI();
   
@@ -17,42 +17,40 @@ export const analyzeAnswer = async (
   const prompt = `
     You are a professional academic grader with expertise in STEM.
     
-    Task: Grade the Student's Answer against the Marking Criteria based on the Teacher's Reference.
+    Task: Grade the Student's Answer (which may consist of multiple images provided in order) against the Marking Criteria based on the Teacher's Reference (also potentially multiple images).
     
     Marking Criteria:
     ${markingCriteriaString}
 
-    STRICT GRADING RULES FOR MATHEMATICS/PHYSICS:
-    1. EXPLICIT FORMULA REQUIREMENT: If a marking point asks for "Stating the formula" (e.g., Δp = mv - mu or quadratic formula), the student MUST write the symbolic formula explicitly. If they skip the symbols and go straight to numerical substitution, you MUST NOT award the mark for stating the formula.
-    2. SUBSTITUTION vs FORMULA: Correct numerical substitution proves understanding of the formula, but it DOES NOT satisfy a requirement to state the formula itself. These are two separate milestones.
-    3. IMPLICIT IDENTIFICATION: If the student uses the correct numbers in the correct places in a formula, you may award points for "Identifying variables/coefficients" if that specific criterion is listed.
-    4. REARRANGEMENT: If an equation is rearranged correctly within the flow of calculation, award points for rearrangement.
-    5. ACCURACY: Check signs (+/-) and units carefully.
-    6. JSON FORMAT: Your output must be valid JSON matching the schema. No paragraph feedback, just a short summary.
-    7. CRITERIA MATCHING: The 'criteriasMet' array MUST match the exact order and length of the Marking Criteria provided.
+    STRICT GRADING RULES:
+    1. SEQUENTIAL REVIEW: The images provided for both student and teacher are in logical order (Page 1, Page 2, etc.). Review them as a continuous piece of work.
+    2. EXPLICIT FORMULA REQUIREMENT: If a marking point asks for "Stating the formula", the student MUST write the symbolic formula explicitly.
+    3. SUBSTITUTION vs FORMULA: Correct numerical substitution DOES NOT satisfy a requirement to state the formula itself.
+    4. ACCURACY: Check signs (+/-) and units carefully.
+    5. JSON FORMAT: Output must be valid JSON matching the schema.
   `;
 
-  const teacherPart = assignment.teacherAnswerImage ? {
+  const teacherParts = assignment.teacherAnswerImages?.map(img => ({
     inlineData: {
       mimeType: "image/png",
-      data: assignment.teacherAnswerImage.split(',')[1]
+      data: img.split(',')[1]
     }
-  } : { text: "Use marking criteria as the only reference." };
+  })) || [{ text: "Use marking criteria as the only reference." }];
 
-  const studentPart = {
+  const studentParts = studentAnswerImages.map(img => ({
     inlineData: {
       mimeType: "image/png",
-      data: studentAnswerBase64.split(',')[1]
+      data: img.split(',')[1]
     }
-  };
+  }));
 
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
     contents: {
       parts: [
         { text: prompt },
-        teacherPart,
-        studentPart
+        ...teacherParts,
+        ...studentParts
       ]
     },
     config: {
@@ -82,17 +80,20 @@ export const analyzeAnswer = async (
   }
 };
 
-export const extractMarkingPoints = async (imageUri: string): Promise<string[]> => {
+export const extractMarkingPoints = async (images: string[]): Promise<string[]> => {
   const ai = getAI();
-  const prompt = "List the specific marking points from this solution (e.g., 'Correct formula', 'Substitution', 'Final answer'). Return as a JSON array of strings.";
+  const prompt = "Look at these solution images provided in order and list the specific marking points (e.g., 'Correct formula', 'Substitution', 'Final answer'). Return as a JSON array of strings.";
   
-  // Use generateContent for text extraction from images
+  const imageParts = images.map(img => ({
+    inlineData: { mimeType: "image/png", data: img.split(',')[1] }
+  }));
+
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
     contents: {
       parts: [
         { text: prompt },
-        { inlineData: { mimeType: "image/png", data: imageUri.split(',')[1] } }
+        ...imageParts
       ]
     },
     config: {

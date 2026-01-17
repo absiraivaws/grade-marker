@@ -13,7 +13,7 @@ export interface Assignment {
   id: string;
   title: string;
   question: string;
-  teacherAnswerImage?: string; // Base64
+  teacherAnswerImages?: string[]; // Array of Base64 strings
   markingPoints: MarkingCriterion[];
   createdAt: number;
 }
@@ -22,7 +22,7 @@ export interface Submission {
   id: string;
   assignmentId: string;
   studentName: string;
-  studentAnswerImage: string; // Base64
+  studentAnswerImages: string[]; // Array of Base64 strings
   feedback: string;
   score: number;
   maxScore: number;
