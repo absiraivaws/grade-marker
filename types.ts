@@ -26,6 +26,7 @@ export interface Submission {
   feedback: string;
   score: number;
   maxScore: number;
+  criteriasMet?: boolean[]; // Added to store breakdown
   gradedAt?: number;
 }
 

@@ -14,6 +14,7 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
   const [studentName, setStudentName] = useState('');
   const [answerImage, setAnswerImage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [lastSubmissionResult, setLastSubmissionResult] = useState<Submission | null>(null);
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -43,10 +44,11 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
         score: grading.score,
         maxScore: grading.totalPossible,
         feedback: grading.feedback,
+        criteriasMet: grading.criteriasMet,
         gradedAt: Date.now()
       };
       onNewSubmission(newSub);
-      alert(`Submission Successful! You scored ${grading.score} / ${grading.totalPossible}`);
+      setLastSubmissionResult(newSub);
       setSelectedAssignment(null);
       setAnswerImage(null);
       setStudentName('');
@@ -81,12 +83,33 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
                 </div>
                 <p className="text-slate-600 dark:text-slate-400 mb-6">{a.question}</p>
                 {mySub && (
-                  <div className="bg-indigo-50 dark:bg-indigo-950/20 p-4 rounded-xl border dark:border-indigo-900/30">
-                    <div className="flex justify-between items-center mb-2">
-                      <span className="text-indigo-800 dark:text-indigo-300 font-bold">Your Grade:</span>
-                      <span className="text-2xl font-black text-indigo-600 dark:text-indigo-400">{mySub.score} / {mySub.maxScore}</span>
+                  <div className="space-y-4">
+                    <div className="bg-indigo-50 dark:bg-indigo-950/20 p-4 rounded-xl border dark:border-indigo-900/30">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-indigo-800 dark:text-indigo-300 font-bold">Your Grade:</span>
+                        <span className="text-2xl font-black text-indigo-600 dark:text-indigo-400">{mySub.score} / {mySub.maxScore}</span>
+                      </div>
+                      <p className="text-sm text-indigo-700 dark:text-indigo-300 italic mb-4">" {mySub.feedback} "</p>
+                      
+                      <div className="border-t dark:border-indigo-900/50 pt-4">
+                        <h4 className="text-xs font-bold uppercase tracking-widest text-indigo-400 mb-3">Breakdown</h4>
+                        <div className="space-y-2">
+                          {a.markingPoints.map((mp, idx) => {
+                            const isMet = mySub.criteriasMet?.[idx];
+                            return (
+                              <div key={idx} className="flex justify-between items-start text-sm">
+                                <span className={isMet ? "text-slate-600 dark:text-slate-400" : "text-red-500 font-medium"}>
+                                  {mp.point}
+                                </span>
+                                {!isMet && (
+                                  <span className="text-red-600 font-bold ml-4">-{mp.weight}</span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
-                    <p className="text-sm text-indigo-700 dark:text-indigo-300 italic">" {mySub.feedback} "</p>
                   </div>
                 )}
               </div>
@@ -107,6 +130,59 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
           </div>
         )}
       </div>
+
+      {/* Result Modal After Submission */}
+      {lastSubmissionResult && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md flex items-center justify-center z-[70] p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-xl p-8 shadow-2xl border dark:border-slate-800 animate-in zoom-in duration-300">
+            <div className="text-center mb-8">
+              <div className="inline-flex items-center justify-center w-16 h-16 bg-green-100 dark:bg-green-900/40 text-green-600 dark:text-green-400 rounded-full mb-4">
+                <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
+              </div>
+              <h3 className="text-3xl font-black text-slate-800 dark:text-white">Graded!</h3>
+              <div className="text-5xl font-black text-indigo-600 dark:text-indigo-400 my-4">
+                {lastSubmissionResult.score} <span className="text-2xl text-slate-400">/ {lastSubmissionResult.maxScore}</span>
+              </div>
+            </div>
+
+            <div className="space-y-4 mb-8">
+              <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">Marking Summary</h4>
+              <div className="bg-slate-50 dark:bg-slate-800/50 rounded-2xl p-6 border dark:border-slate-800 space-y-3">
+                {assignments.find(a => a.id === lastSubmissionResult.assignmentId)?.markingPoints.map((mp, idx) => {
+                  const isMet = lastSubmissionResult.criteriasMet?.[idx];
+                  return (
+                    <div key={idx} className="flex justify-between items-start">
+                      <div className="flex gap-3">
+                        {isMet ? (
+                          <svg className="w-5 h-5 text-green-500 mt-0.5 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+                        ) : (
+                          <svg className="w-5 h-5 text-red-500 mt-0.5 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" /></svg>
+                        )}
+                        <span className={`text-sm ${isMet ? 'text-slate-700 dark:text-slate-300' : 'text-red-500 font-medium'}`}>
+                          {mp.point}
+                        </span>
+                      </div>
+                      {!isMet && (
+                        <span className="text-red-600 font-black text-sm whitespace-nowrap">-{mp.weight}</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="p-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-xl text-sm text-indigo-700 dark:text-indigo-300 italic border border-indigo-100 dark:border-indigo-900/30">
+                "{lastSubmissionResult.feedback}"
+              </div>
+            </div>
+
+            <button 
+              onClick={() => setLastSubmissionResult(null)}
+              className="w-full py-4 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-2xl font-bold hover:opacity-90 transition-opacity"
+            >
+              Close & Continue
+            </button>
+          </div>
+        </div>
+      )}
 
       {selectedAssignment && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">

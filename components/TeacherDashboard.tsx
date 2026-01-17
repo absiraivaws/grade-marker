@@ -4,7 +4,6 @@ import { Assignment, Submission, MarkingCriterion } from '../types';
 import { extractMarkingPoints } from '../services/geminiService';
 
 interface Props {
-  // Fixed typo: changed assignments[] to Assignment[]
   assignments: Assignment[];
   submissions: Submission[];
   onCreateAssignment: (a: Assignment) => void;
@@ -37,7 +36,6 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
     setLoading(true);
     try {
       const points = await extractMarkingPoints(image);
-      // Append suggested points to existing ones
       const suggested = points.map(p => ({ point: p, weight: 1 }));
       setCriteria([...criteria, ...suggested]);
     } catch (err) {
@@ -166,11 +164,6 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                       </button>
                     </div>
                   ))}
-                  {criteria.length === 0 && (
-                    <p className="text-sm text-slate-400 dark:text-slate-500 italic text-center py-6 bg-slate-50 dark:bg-slate-800/30 border-2 border-dashed dark:border-slate-700 rounded-xl">
-                      No marking points yet. {image ? 'Click "Suggest marking points" above' : 'Add points manually or upload an image'}.
-                    </p>
-                  )}
                 </div>
               </div>
 
@@ -236,7 +229,7 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
 
       {selectedSubmission && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-4xl max-h-[90vh] overflow-y-auto p-8 shadow-2xl relative border dark:border-slate-800">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-5xl max-h-[90vh] overflow-y-auto p-8 shadow-2xl relative border dark:border-slate-800">
             <button 
               onClick={() => setSelectedSubmission(null)}
               className="absolute top-6 right-6 text-slate-400 hover:text-slate-600"
@@ -249,26 +242,45 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
               </div>
               <div>
                 <h3 className="text-2xl font-bold text-slate-800 dark:text-white">{selectedSubmission.studentName}</h3>
-                <p className="text-sm text-slate-500 dark:text-slate-400">Submitted for {assignments.find(a => a.id === selectedSubmission.assignmentId)?.title}</p>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Submission Detail</p>
               </div>
               <div className="ml-auto text-right">
-                <div className="text-3xl font-black text-indigo-600 dark:text-indigo-400">{selectedSubmission.score} / {selectedSubmission.maxScore}</div>
-                <div className="text-xs font-bold text-green-600 dark:text-green-400 uppercase">AI Evaluated</div>
+                <div className="text-4xl font-black text-indigo-600 dark:text-indigo-400">{selectedSubmission.score} / {selectedSubmission.maxScore}</div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
               <div>
-                <h4 className="font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase text-xs tracking-wider">Student's Work</h4>
-                <div className="border dark:border-slate-700 rounded-xl overflow-hidden shadow-sm bg-slate-100 dark:bg-slate-800">
-                  <img src={selectedSubmission.studentAnswerImage} className="w-full object-contain max-h-[500px]" alt="Student Submission" />
+                <h4 className="font-bold text-slate-700 dark:text-slate-300 mb-3 uppercase text-xs tracking-widest">Student Image</h4>
+                <div className="border dark:border-slate-700 rounded-2xl overflow-hidden shadow-inner bg-slate-100 dark:bg-slate-800 p-2">
+                  <img src={selectedSubmission.studentAnswerImage} className="w-full h-auto object-contain max-h-[600px] rounded-lg" alt="Student Work" />
                 </div>
               </div>
               <div className="space-y-6">
                 <div>
-                  <h4 className="font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase text-xs tracking-wider">AI Feedback</h4>
-                  <div className="p-6 bg-indigo-50 dark:bg-slate-800 rounded-2xl border border-indigo-100 dark:border-slate-700 text-slate-800 dark:text-slate-200 italic leading-relaxed">
-                    "{selectedSubmission.feedback}"
+                  <h4 className="font-bold text-slate-700 dark:text-slate-300 mb-3 uppercase text-xs tracking-widest">Marking Breakdown</h4>
+                  <div className="bg-slate-50 dark:bg-slate-800/50 rounded-2xl border dark:border-slate-700 divide-y dark:divide-slate-700">
+                    {assignments.find(a => a.id === selectedSubmission.assignmentId)?.markingPoints.map((mp, idx) => {
+                      const isMet = selectedSubmission.criteriasMet?.[idx];
+                      return (
+                        <div key={idx} className="flex justify-between items-center p-4">
+                          <span className={`text-sm ${isMet ? 'text-slate-700 dark:text-slate-300' : 'text-red-500 font-medium'}`}>
+                            {mp.point}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            {isMet ? (
+                              <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 font-bold text-sm rounded">
+                                +{mp.weight}
+                              </span>
+                            ) : (
+                              <span className="px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 font-bold text-sm rounded">
+                                -{mp.weight}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -332,8 +344,8 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                       <td className="px-6 py-4">
                         <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded">Graded</span>
                       </td>
-                      <td className="px-6 py-4 text-indigo-600 dark:text-indigo-400 font-semibold text-sm group-hover:underline">
-                        View
+                      <td className="px-6 py-4 text-indigo-600 dark:text-indigo-400 font-semibold text-sm group-hover:underline text-right">
+                        Review Marks
                       </td>
                     </tr>
                   );

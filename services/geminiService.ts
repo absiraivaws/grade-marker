@@ -15,27 +15,29 @@ export const analyzeAnswer = async (
     .join("\n");
 
   const prompt = `
-    You are an expert academic grader. 
-    Task: Grade the student's answer based on the Teacher's Reference Solution and the Marking Criteria provided.
+    You are a professional academic grader with expertise in STEM.
+    
+    Task: Grade the Student's Answer against the Marking Criteria based on the Teacher's Reference.
     
     Marking Criteria:
     ${markingCriteriaString}
 
-    Teacher's Reference Solution is provided as an image.
-    Student's Answer is provided as an image.
-
-    Compare them carefully. Be fair but firm. 
-    If the student's handwriting is hard to read, do your best to transcribe it mentally.
-    Provide a score and feedback for each criterion.
+    STRICT GRADING RULES FOR MATHEMATICS/PHYSICS:
+    1. EXPLICIT FORMULA REQUIREMENT: If a marking point asks for "Stating the formula" (e.g., Δp = mv - mu or quadratic formula), the student MUST write the symbolic formula explicitly. If they skip the symbols and go straight to numerical substitution, you MUST NOT award the mark for stating the formula.
+    2. SUBSTITUTION vs FORMULA: Correct numerical substitution proves understanding of the formula, but it DOES NOT satisfy a requirement to state the formula itself. These are two separate milestones.
+    3. IMPLICIT IDENTIFICATION: If the student uses the correct numbers in the correct places in a formula, you may award points for "Identifying variables/coefficients" if that specific criterion is listed.
+    4. REARRANGEMENT: If an equation is rearranged correctly within the flow of calculation, award points for rearrangement.
+    5. ACCURACY: Check signs (+/-) and units carefully.
+    6. JSON FORMAT: Your output must be valid JSON matching the schema. No paragraph feedback, just a short summary.
+    7. CRITERIA MATCHING: The 'criteriasMet' array MUST match the exact order and length of the Marking Criteria provided.
   `;
 
-  // Prepare images
   const teacherPart = assignment.teacherAnswerImage ? {
     inlineData: {
       mimeType: "image/png",
       data: assignment.teacherAnswerImage.split(',')[1]
     }
-  } : { text: "No reference image provided. Grade based on marking criteria only." };
+  } : { text: "Use marking criteria as the only reference." };
 
   const studentPart = {
     inlineData: {
@@ -72,16 +74,17 @@ export const analyzeAnswer = async (
   });
 
   try {
-    return JSON.parse(response.text || "{}") as AIResponse;
+    const text = response.text || "{}";
+    return JSON.parse(text) as AIResponse;
   } catch (e) {
     console.error("Failed to parse AI response", e);
-    throw new Error("AI grading failed to produce valid result.");
+    throw new Error("AI grading failed.");
   }
 };
 
 export const extractMarkingPoints = async (imageUri: string): Promise<string[]> => {
   const ai = getAI();
-  const prompt = "Look at this teacher's answer sheet. Extract a list of key marking points or rubrics that should be used to grade a student's answer. Return them as a simple list of strings.";
+  const prompt = "List the specific marking points from this solution (e.g., 'Correct formula', 'Substitution', 'Final answer'). Return as a JSON array of strings.";
   
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
