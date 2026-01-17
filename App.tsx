@@ -17,8 +17,18 @@ const App: React.FC = () => {
   useEffect(() => {
     const savedAssignments = localStorage.getItem('sg_assignments');
     const savedSubmissions = localStorage.getItem('sg_submissions');
-    if (savedAssignments) setAssignments(JSON.parse(savedAssignments));
-    if (savedSubmissions) setSubmissions(JSON.parse(savedSubmissions));
+    
+    if (savedAssignments) {
+      const parsed = JSON.parse(savedAssignments);
+      // Ensure newest first on load
+      setAssignments(parsed.sort((a: Assignment, b: Assignment) => b.createdAt - a.createdAt));
+    }
+    
+    if (savedSubmissions) {
+      const parsed = JSON.parse(savedSubmissions);
+      // Ensure newest first on load
+      setSubmissions(parsed.sort((a: Submission, b: Submission) => (b.gradedAt || 0) - (a.gradedAt || 0)));
+    }
   }, []);
 
   useEffect(() => {
@@ -42,11 +52,13 @@ const App: React.FC = () => {
   }, [isDarkMode]);
 
   const handleCreateAssignment = (newAssignment: Assignment) => {
-    setAssignments([...assignments, newAssignment]);
+    // Add to the beginning of the array (Newest first)
+    setAssignments([newAssignment, ...assignments]);
   };
 
   const handleAddSubmission = (newSubmission: Submission) => {
-    setSubmissions([...submissions, newSubmission]);
+    // Add to the beginning of the array (Newest first)
+    setSubmissions([newSubmission, ...submissions]);
   };
 
   const handleUpdateSubmission = (updatedSubmission: Submission) => {

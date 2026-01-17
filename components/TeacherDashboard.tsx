@@ -135,17 +135,23 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
     return Array.from(new Set(options)).sort((a, b) => a - b);
   };
 
-  // Derived data for filters
+  // Derived data for filters and ensures reverse chronological order
   const uniqueStudents = useMemo(() => {
     return Array.from(new Set(submissions.map(s => s.studentName))).sort();
   }, [submissions]);
 
+  const sortedAssignments = useMemo(() => {
+    return [...assignments].sort((a, b) => b.createdAt - a.createdAt);
+  }, [assignments]);
+
   const filteredSubmissions = useMemo(() => {
-    return submissions.filter(s => {
-      const matchesAssignment = filterAssignmentId === 'all' || s.assignmentId === filterAssignmentId;
-      const matchesStudent = filterStudentName === 'all' || s.studentName === filterStudentName;
-      return matchesAssignment && matchesStudent;
-    });
+    return submissions
+      .filter(s => {
+        const matchesAssignment = filterAssignmentId === 'all' || s.assignmentId === filterAssignmentId;
+        const matchesStudent = filterStudentName === 'all' || s.studentName === filterStudentName;
+        return matchesAssignment && matchesStudent;
+      })
+      .sort((a, b) => (b.gradedAt || 0) - (a.gradedAt || 0));
   }, [submissions, filterAssignmentId, filterStudentName]);
 
   const getComparisonScores = () => {
@@ -171,7 +177,7 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {assignments.map(a => {
+        {sortedAssignments.map(a => {
           const subCount = submissions.filter(s => s.assignmentId === a.id).length;
           return (
             <div 
@@ -211,7 +217,7 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                 className="bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 transition-shadow"
               >
                 <option value="all">All Assignments</option>
-                {assignments.map(a => (
+                {sortedAssignments.map(a => (
                   <option key={a.id} value={a.id}>{a.title}</option>
                 ))}
               </select>
@@ -255,7 +261,7 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                     }}>
                       <td className="px-6 py-4 font-medium text-slate-800 dark:text-slate-200">{s.studentName}</td>
                       <td className="px-6 py-4 text-slate-600 dark:text-slate-400">{assign?.title || 'Unknown'}</td>
-                      <td className="px-6 py-4 font-bold text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
+                      <td className="px-6 py-4 font-bold text-indigo-600 dark:text-indigo-400">
                         <span className="whitespace-nowrap">{s.score} / {s.maxScore}</span>
                       </td>
                       <td className="px-6 py-4">
@@ -280,7 +286,6 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
         </div>
       </div>
 
-      {/* Modals remain the same logic, but ensure marks formatting in Review Modal */}
       {showAdd && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
           <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-8 shadow-2xl transition-colors border dark:border-slate-800">
@@ -429,7 +434,7 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
               </div>
               <div className="ml-auto flex items-center gap-6">
                 <div className="text-4xl font-black text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
-                  {isEditingMarks ? tempScores.reduce((a, b) => a + b, 0) : selectedSubmission.score} / {selectedSubmission.maxScore}
+                  <span className="whitespace-nowrap">{isEditingMarks ? tempScores.reduce((a, b) => a + b, 0) : selectedSubmission.score} / {selectedSubmission.maxScore}</span>
                 </div>
                 {!isEditingMarks ? (
                   <button 
@@ -500,9 +505,6 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                       );
                     })}
                   </div>
-                  {isEditingMarks && (
-                    <p className="mt-4 text-xs text-indigo-500 italic">You are currently in edit mode. Click save above to apply these marks.</p>
-                  )}
                 </div>
               </div>
             </div>

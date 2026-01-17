@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Assignment, Submission } from '../types';
 import { analyzeAnswer } from '../services/geminiService';
 
@@ -37,7 +37,6 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
     try {
       const grading = await analyzeAnswer(selectedAssignment, answerImage);
       
-      // Initialize scores from AI booleans (full marks or 0)
       const initialScores = grading.criteriasMet.map((met, idx) => 
         met ? (selectedAssignment.markingPoints[idx]?.weight || 0) : 0
       );
@@ -67,6 +66,10 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
     }
   };
 
+  const sortedAssignments = useMemo(() => {
+    return [...assignments].sort((a, b) => b.createdAt - a.createdAt);
+  }, [assignments]);
+
   const renderBreakdownItem = (point: string, score: number, max: number, idx: number) => {
     const isFull = score === max;
     const isNone = score === 0;
@@ -76,7 +79,7 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
           {point}
         </span>
         <span className={`font-bold ml-4 whitespace-nowrap ${isFull ? 'text-green-600 dark:text-green-400' : isNone ? 'text-red-600' : 'text-amber-600'}`}>
-          {score} / {max}
+          <span className="whitespace-nowrap">{score} / {max}</span>
         </span>
       </div>
     );
@@ -87,7 +90,7 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
       <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Available Assignments</h2>
       
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {assignments.map(a => {
+        {sortedAssignments.map(a => {
           const mySub = submissions.find(s => s.assignmentId === a.id);
           return (
             <div key={a.id} className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm flex flex-col transition-all hover:shadow-md">
@@ -110,7 +113,9 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
                     <div className="bg-indigo-50 dark:bg-indigo-950/20 p-4 rounded-xl border dark:border-indigo-900/30">
                       <div className="flex justify-between items-center mb-2">
                         <span className="text-indigo-800 dark:text-indigo-300 font-bold">Your Grade:</span>
-                        <span className="text-2xl font-black text-indigo-600 dark:text-indigo-400">{mySub.score} / {mySub.maxScore}</span>
+                        <span className="text-2xl font-black text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
+                          {mySub.score} / {mySub.maxScore}
+                        </span>
                       </div>
                       <p className="text-sm text-indigo-700 dark:text-indigo-300 italic mb-4">" {mySub.feedback} "</p>
                       
@@ -148,7 +153,7 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
               </div>
               <h3 className="text-3xl font-black text-slate-800 dark:text-white">Graded!</h3>
               <div className="text-5xl font-black text-indigo-600 dark:text-indigo-400 my-4">
-                {lastSubmissionResult.score} <span className="text-2xl text-slate-400">/ {lastSubmissionResult.maxScore}</span>
+                <span className="whitespace-nowrap">{lastSubmissionResult.score} <span className="text-2xl text-slate-400">/ {lastSubmissionResult.maxScore}</span></span>
               </div>
             </div>
             <div className="space-y-4 mb-8">
@@ -166,14 +171,14 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
                         ) : isNone ? (
                           <svg className="w-5 h-5 text-red-500 mt-0.5 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" /></svg>
                         ) : (
-                          <div className="w-5 h-5 bg-amber-400 rounded-full mt-0.5 flex items-center justify-center text-[10px] text-white font-bold">!</div>
+                          <div className="w-5 h-5 bg-amber-400 rounded-full mt-0.5 flex items-center justify-center text-[10px] text-white font-bold shrink-0">!</div>
                         )}
                         <span className={`text-sm ${isNone ? 'text-red-500 font-medium' : 'text-slate-700 dark:text-slate-300'}`}>
                           {mp.point}
                         </span>
                       </div>
                       <span className={`font-black text-sm whitespace-nowrap ${isFull ? 'text-green-600' : isNone ? 'text-red-600' : 'text-amber-600'}`}>
-                        {score} / {mp.weight}
+                        <span className="whitespace-nowrap">{score} / {mp.weight}</span>
                       </span>
                     </div>
                   );
@@ -199,14 +204,19 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Your Name</label>
                 <input className="w-full bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-lg p-3 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" value={studentName} onChange={e => setStudentName(e.target.value)} placeholder="Type your name here" />
               </div>
-              <div className="p-8 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-2xl text-center">
+              <div className="p-8 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-2xl text-center bg-slate-50 dark:bg-slate-800/50">
                 <input type="file" accept="image/*" id="student-answer" className="hidden" onChange={handleImageChange} />
                 {!answerImage ? (
-                  <label htmlFor="student-answer" className="cursor-pointer font-bold text-indigo-600">Click to upload photo</label>
+                  <label htmlFor="student-answer" className="cursor-pointer block">
+                    <div className="flex flex-col items-center">
+                      <svg className="w-12 h-12 text-slate-300 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                      <span className="font-bold text-indigo-600">Click to upload photo</span>
+                    </div>
+                  </label>
                 ) : (
                   <div className="relative">
-                    <img src={answerImage} className="max-h-48 mx-auto rounded-lg" alt="My work" />
-                    <button onClick={() => setAnswerImage(null)} className="absolute -top-2 -right-2 bg-red-500 text-white p-1 rounded-full">×</button>
+                    <img src={answerImage} className="max-h-48 mx-auto rounded-lg shadow-md" alt="My work" />
+                    <button onClick={() => setAnswerImage(null)} className="absolute -top-2 -right-2 bg-red-500 text-white w-8 h-8 rounded-full flex items-center justify-center">×</button>
                   </div>
                 )}
               </div>
