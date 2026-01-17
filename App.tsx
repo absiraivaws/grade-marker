@@ -49,6 +49,10 @@ const App: React.FC = () => {
     setSubmissions([...submissions, newSubmission]);
   };
 
+  const handleUpdateSubmission = (updatedSubmission: Submission) => {
+    setSubmissions(submissions.map(s => s.id === updatedSubmission.id ? updatedSubmission : s));
+  };
+
   const toggleTheme = () => setIsDarkMode(prev => !prev);
 
   if (!role) {
@@ -125,7 +129,8 @@ const App: React.FC = () => {
           <TeacherDashboard 
             assignments={assignments} 
             submissions={submissions}
-            onCreateAssignment={handleCreateAssignment} 
+            onCreateAssignment={handleCreateAssignment}
+            onUpdateSubmission={handleUpdateSubmission}
           />
         ) : (
           <StudentDashboard 

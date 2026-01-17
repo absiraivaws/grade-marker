@@ -7,9 +7,10 @@ interface Props {
   assignments: Assignment[];
   submissions: Submission[];
   onCreateAssignment: (a: Assignment) => void;
+  onUpdateSubmission: (s: Submission) => void;
 }
 
-const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateAssignment }) => {
+const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateAssignment, onUpdateSubmission }) => {
   const [showAdd, setShowAdd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
@@ -78,6 +79,31 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
     setQuestion('');
     setImage(null);
     setCriteria([]);
+  };
+
+  const toggleCriterionInReview = (submission: Submission, index: number) => {
+    const assignment = assignments.find(a => a.id === submission.assignmentId);
+    if (!assignment || !submission.criteriasMet) return;
+
+    const newCriteriasMet = [...submission.criteriasMet];
+    newCriteriasMet[index] = !newCriteriasMet[index];
+
+    // Recalculate score
+    let newScore = 0;
+    assignment.markingPoints.forEach((mp, idx) => {
+      if (newCriteriasMet[idx]) {
+        newScore += mp.weight;
+      }
+    });
+
+    const updatedSubmission: Submission = {
+      ...submission,
+      criteriasMet: newCriteriasMet,
+      score: newScore
+    };
+
+    setSelectedSubmission(updatedSubmission);
+    onUpdateSubmission(updatedSubmission);
   };
 
   return (
@@ -258,30 +284,35 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
               </div>
               <div className="space-y-6">
                 <div>
-                  <h4 className="font-bold text-slate-700 dark:text-slate-300 mb-3 uppercase text-xs tracking-widest">Marking Breakdown</h4>
+                  <h4 className="font-bold text-slate-700 dark:text-slate-300 mb-3 uppercase text-xs tracking-widest">Marking Breakdown (Click to Override)</h4>
                   <div className="bg-slate-50 dark:bg-slate-800/50 rounded-2xl border dark:border-slate-700 divide-y dark:divide-slate-700">
                     {assignments.find(a => a.id === selectedSubmission.assignmentId)?.markingPoints.map((mp, idx) => {
                       const isMet = selectedSubmission.criteriasMet?.[idx];
                       return (
-                        <div key={idx} className="flex justify-between items-center p-4">
+                        <button 
+                          key={idx} 
+                          onClick={() => toggleCriterionInReview(selectedSubmission, idx)}
+                          className="w-full flex justify-between items-center p-4 hover:bg-slate-100 dark:hover:bg-slate-800/80 transition-colors text-left group"
+                        >
                           <span className={`text-sm ${isMet ? 'text-slate-700 dark:text-slate-300' : 'text-red-500 font-medium'}`}>
                             {mp.point}
                           </span>
                           <div className="flex items-center gap-2">
                             {isMet ? (
-                              <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 font-bold text-sm rounded">
+                              <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 font-bold text-sm rounded shadow-sm">
                                 +{mp.weight}
                               </span>
                             ) : (
-                              <span className="px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 font-bold text-sm rounded">
+                              <span className="px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 font-bold text-sm rounded shadow-sm">
                                 -{mp.weight}
                               </span>
                             )}
                           </div>
-                        </div>
+                        </button>
                       );
                     })}
                   </div>
+                  <p className="mt-4 text-xs text-slate-400 dark:text-slate-500 italic">Overrides are saved immediately and updated on the student's dashboard.</p>
                 </div>
               </div>
             </div>
