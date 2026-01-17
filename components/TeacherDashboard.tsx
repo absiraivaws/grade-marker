@@ -12,6 +12,10 @@ interface Props {
 const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateAssignment }) => {
   const [showAdd, setShowAdd] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
+  const [selectedSubmission, setSelectedSubmission] = useState<Submission | null>(null);
+  
+  // Create Form State
   const [title, setTitle] = useState('');
   const [question, setQuestion] = useState('');
   const [image, setImage] = useState<string | null>(null);
@@ -76,10 +80,11 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
         </button>
       </div>
 
+      {/* CREATE ASSIGNMENT MODAL */}
       {showAdd && (
         <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-8 shadow-2xl">
-            <h3 className="text-2xl font-bold mb-6">Create Assignment</h3>
+            <h3 className="text-2xl font-bold mb-6 text-slate-800">Create Assignment</h3>
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Title</label>
@@ -99,9 +104,9 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Upload Reference Answer (Image)</label>
-                <input type="file" accept="image/*" onChange={handleImageChange} className="w-full" />
+                <input type="file" accept="image/*" onChange={handleImageChange} className="w-full text-sm" />
                 {image && (
-                  <div className="mt-4 flex flex-col items-center">
+                  <div className="mt-4 flex flex-col items-center p-4 bg-slate-50 rounded-lg">
                     <img src={image} className="max-h-40 rounded border shadow-sm" alt="Reference" />
                     <button 
                       onClick={suggestMarkingPoints}
@@ -171,13 +176,114 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
         </div>
       )}
 
+      {/* VIEW ASSIGNMENT MODAL */}
+      {selectedAssignment && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-8 shadow-2xl relative">
+            <button 
+              onClick={() => setSelectedAssignment(null)}
+              className="absolute top-6 right-6 text-slate-400 hover:text-slate-600"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+            <h3 className="text-2xl font-bold mb-2 text-slate-800">{selectedAssignment.title}</h3>
+            <p className="text-sm text-slate-400 mb-6 italic">Created on {new Date(selectedAssignment.createdAt).toLocaleString()}</p>
+            
+            <div className="space-y-6">
+              <div>
+                <h4 className="font-bold text-slate-700 mb-2 uppercase text-xs tracking-wider">Question Description</h4>
+                <div className="p-4 bg-slate-50 rounded-xl border text-slate-800 whitespace-pre-wrap">{selectedAssignment.question}</div>
+              </div>
+
+              {selectedAssignment.teacherAnswerImage && (
+                <div>
+                  <h4 className="font-bold text-slate-700 mb-2 uppercase text-xs tracking-wider">Reference Answer Image</h4>
+                  <img src={selectedAssignment.teacherAnswerImage} className="max-h-64 rounded-xl shadow-sm border" alt="Reference" />
+                </div>
+              )}
+
+              <div>
+                <h4 className="font-bold text-slate-700 mb-2 uppercase text-xs tracking-wider">Marking Criteria</h4>
+                <div className="space-y-2">
+                  {selectedAssignment.markingPoints.map((m, idx) => (
+                    <div key={idx} className="flex justify-between items-center p-3 bg-indigo-50/50 rounded-lg border border-indigo-100">
+                      <span className="text-slate-700">{m.point}</span>
+                      <span className="font-bold text-indigo-600">+{m.weight}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW SUBMISSION MODAL */}
+      {selectedSubmission && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-[70] p-4">
+          <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto p-8 shadow-2xl relative">
+            <button 
+              onClick={() => setSelectedSubmission(null)}
+              className="absolute top-6 right-6 text-slate-400 hover:text-slate-600"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+            <div className="flex items-center gap-4 mb-6">
+              <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center font-bold text-xl uppercase">
+                {selectedSubmission.studentName.charAt(0)}
+              </div>
+              <div>
+                <h3 className="text-2xl font-bold text-slate-800">{selectedSubmission.studentName}</h3>
+                <p className="text-sm text-slate-500">Submitted for {assignments.find(a => a.id === selectedSubmission.assignmentId)?.title}</p>
+              </div>
+              <div className="ml-auto text-right">
+                <div className="text-3xl font-black text-indigo-600">{selectedSubmission.score} / {selectedSubmission.maxScore}</div>
+                <div className="text-xs font-bold text-green-600 uppercase">AI Evaluated</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div>
+                <h4 className="font-bold text-slate-700 mb-2 uppercase text-xs tracking-wider">Student's Work</h4>
+                <div className="border rounded-xl overflow-hidden shadow-sm bg-slate-100">
+                  <img src={selectedSubmission.studentAnswerImage} className="w-full object-contain max-h-[500px]" alt="Student Submission" />
+                </div>
+              </div>
+              <div className="space-y-6">
+                <div>
+                  <h4 className="font-bold text-slate-700 mb-2 uppercase text-xs tracking-wider">AI Feedback</h4>
+                  <div className="p-6 bg-indigo-50 rounded-2xl border border-indigo-100 text-slate-800 italic leading-relaxed">
+                    "{selectedSubmission.feedback}"
+                  </div>
+                </div>
+                <div>
+                  <h4 className="font-bold text-slate-700 mb-2 uppercase text-xs tracking-wider">Reference Used</h4>
+                  {assignments.find(a => a.id === selectedSubmission.assignmentId)?.teacherAnswerImage ? (
+                    <img src={assignments.find(a => a.id === selectedSubmission.assignmentId)?.teacherAnswerImage} className="max-h-32 rounded border" alt="Reference" />
+                  ) : (
+                    <p className="text-xs text-slate-400 italic">No reference image was provided for this assignment.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {assignments.map(a => {
           const subCount = submissions.filter(s => s.assignmentId === a.id).length;
           return (
-            <div key={a.id} className="bg-white border rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow">
-              <h3 className="font-bold text-lg text-slate-800">{a.title}</h3>
-              <p className="text-slate-500 text-sm line-clamp-2 mt-1">{a.question}</p>
+            <div 
+              key={a.id} 
+              onClick={() => setSelectedAssignment(a)}
+              className="bg-white border rounded-xl p-6 shadow-sm hover:shadow-md transition-all cursor-pointer group hover:border-indigo-300"
+            >
+              <div className="flex justify-between items-start mb-2">
+                <h3 className="font-bold text-lg text-slate-800 group-hover:text-indigo-600">{a.title}</h3>
+                <svg className="w-5 h-5 text-slate-300 group-hover:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
+              </div>
+              <p className="text-slate-500 text-sm line-clamp-2">{a.question}</p>
               <div className="mt-4 flex items-center justify-between">
                 <span className="text-xs font-medium text-slate-400">Created {new Date(a.createdAt).toLocaleDateString()}</span>
                 <span className="px-3 py-1 bg-indigo-50 text-indigo-700 text-xs font-bold rounded-full">{subCount} Submissions</span>
@@ -202,13 +308,14 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                 <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Assignment</th>
                 <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Score</th>
                 <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Status</th>
+                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y">
               {submissions.map(s => {
                 const assign = assignments.find(a => a.id === s.assignmentId);
                 return (
-                  <tr key={s.id} className="hover:bg-slate-50">
+                  <tr key={s.id} className="hover:bg-slate-50 group cursor-pointer" onClick={() => setSelectedSubmission(s)}>
                     <td className="px-6 py-4 font-medium text-slate-800">{s.studentName}</td>
                     <td className="px-6 py-4 text-slate-600">{assign?.title || 'Unknown'}</td>
                     <td className="px-6 py-4">
@@ -217,12 +324,15 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                     <td className="px-6 py-4">
                       <span className="px-2 py-1 bg-green-100 text-green-700 text-xs font-bold rounded">Graded (AI)</span>
                     </td>
+                    <td className="px-6 py-4 text-indigo-600 font-semibold text-sm group-hover:underline">
+                      View Answer
+                    </td>
                   </tr>
                 );
               })}
               {submissions.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-6 py-10 text-center text-slate-400">No submissions to show.</td>
+                  <td colSpan={5} className="px-6 py-10 text-center text-slate-400">No submissions to show.</td>
                 </tr>
               )}
             </tbody>
