@@ -146,7 +146,7 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
     <div className="space-y-8">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Your Assignments</h2>
-        <button onClick={() => setShowAdd(true)} className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-semibold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200">
+        <button onClick={() => setShowAdd(true)} className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-semibold hover:bg-indigo-700 transition-colors shadow-lg">
           + New Assignment
         </button>
       </div>
@@ -192,14 +192,20 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
               </tr>
             </thead>
             <tbody className="divide-y dark:divide-slate-800">
-              {filteredSubmissions.map(s => (
-                <tr key={s.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer" onClick={() => { setSelectedSubmission(s); setIsEditingMarks(false); }}>
-                  <td className="px-6 py-4 font-medium">{s.studentName}</td>
-                  <td className="px-6 py-4 text-slate-600">{assignments.find(a => a.id === s.assignmentId)?.title}</td>
-                  <td className="px-6 py-4 font-bold text-indigo-600 whitespace-nowrap">{s.score} / {s.maxScore}</td>
-                  <td className="px-6 py-4 text-indigo-600 font-semibold text-sm text-right">Review</td>
+              {filteredSubmissions.length > 0 ? (
+                filteredSubmissions.map(s => (
+                  <tr key={s.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer" onClick={() => { setSelectedSubmission(s); setIsEditingMarks(false); }}>
+                    <td className="px-6 py-4 font-medium">{s.studentName}</td>
+                    <td className="px-6 py-4 text-slate-600">{assignments.find(a => a.id === s.assignmentId)?.title}</td>
+                    <td className="px-6 py-4 font-bold text-indigo-600 whitespace-nowrap">{s.score} / {s.maxScore}</td>
+                    <td className="px-6 py-4 text-indigo-600 font-semibold text-sm text-right">Review</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={4} className="px-6 py-12 text-center text-slate-400 italic">No submissions yet.</td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>
@@ -247,7 +253,13 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
               </div>
               <div className="flex gap-4 pt-4 border-t dark:border-slate-800">
                 <button onClick={() => setShowAdd(false)} className="flex-1 py-3 font-bold text-slate-500">Cancel</button>
-                <button onClick={handleSubmit} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold">Create</button>
+                <button 
+                  onClick={handleSubmit} 
+                  disabled={criteria.length === 0} 
+                  className={`flex-1 py-3 text-white rounded-xl font-bold transition-all ${criteria.length === 0 ? 'bg-slate-300 dark:bg-slate-700 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+                >
+                  Create
+                </button>
               </div>
             </div>
           </div>
@@ -318,8 +330,6 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                     const currentScore = isEditingMarks ? tempScores[idx] : (selectedSubmission.criteriaScores ? selectedSubmission.criteriaScores[idx] : (selectedSubmission.criteriasMet?.[idx] ? mp.weight : 0));
                     
                     // Determine if this specific mark was edited manually
-                    // If we have criteriaScores, it means it's been handled/edited by teacher
-                    // We compare with what the AI would have given (criteriasMet)
                     const wasEdited = !isEditingMarks && selectedSubmission.criteriaScores && (
                         currentScore !== (selectedSubmission.criteriasMet?.[idx] ? mp.weight : 0)
                     );
