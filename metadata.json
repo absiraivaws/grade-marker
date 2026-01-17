@@ -1,0 +1,7 @@
+{
+  "name": "SmartGrader AI",
+  "description": "An automated grading assistant that helps teachers mark student handwritten or typed answers by comparing them against reference solutions using Gemini Vision.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
