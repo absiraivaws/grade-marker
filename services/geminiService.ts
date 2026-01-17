@@ -4,6 +4,11 @@ import { Assignment, AIResponse } from "../types";
 
 const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
+const getMimeType = (base64: string): string => {
+  const match = base64.match(/^data:([^;]+);/);
+  return match ? match[1] : "image/png";
+};
+
 export const analyzeAnswer = async (
   assignment: Assignment,
   studentAnswerImages: string[]
@@ -17,13 +22,13 @@ export const analyzeAnswer = async (
   const prompt = `
     You are a professional academic grader with expertise in STEM.
     
-    Task: Grade the Student's Answer (which may consist of multiple images provided in order) against the Marking Criteria based on the Teacher's Reference (also potentially multiple images).
+    Task: Grade the Student's Answer (which may consist of multiple files/images provided in order) against the Marking Criteria based on the Teacher's Reference (also potentially multiple files/images).
     
     Marking Criteria:
     ${markingCriteriaString}
 
     STRICT GRADING RULES:
-    1. SEQUENTIAL REVIEW: The images provided for both student and teacher are in logical order (Page 1, Page 2, etc.). Review them as a continuous piece of work.
+    1. SEQUENTIAL REVIEW: The files provided for both student and teacher are in logical order. Review them as a continuous piece of work.
     2. EXPLICIT FORMULA REQUIREMENT: If a marking point asks for "Stating the formula", the student MUST write the symbolic formula explicitly.
     3. SUBSTITUTION vs FORMULA: Correct numerical substitution DOES NOT satisfy a requirement to state the formula itself.
     4. ACCURACY: Check signs (+/-) and units carefully.
@@ -32,14 +37,14 @@ export const analyzeAnswer = async (
 
   const teacherParts = assignment.teacherAnswerImages?.map(img => ({
     inlineData: {
-      mimeType: "image/png",
+      mimeType: getMimeType(img),
       data: img.split(',')[1]
     }
   })) || [{ text: "Use marking criteria as the only reference." }];
 
   const studentParts = studentAnswerImages.map(img => ({
     inlineData: {
-      mimeType: "image/png",
+      mimeType: getMimeType(img),
       data: img.split(',')[1]
     }
   }));
@@ -82,10 +87,13 @@ export const analyzeAnswer = async (
 
 export const extractMarkingPoints = async (images: string[]): Promise<string[]> => {
   const ai = getAI();
-  const prompt = "Look at these solution images provided in order and list the specific marking points (e.g., 'Correct formula', 'Substitution', 'Final answer'). Return as a JSON array of strings.";
+  const prompt = "Look at these solution files (images/PDFs) provided in order and list the specific marking points (e.g., 'Correct formula', 'Substitution', 'Final answer'). Return as a JSON array of strings.";
   
   const imageParts = images.map(img => ({
-    inlineData: { mimeType: "image/png", data: img.split(',')[1] }
+    inlineData: { 
+      mimeType: getMimeType(img), 
+      data: img.split(',')[1] 
+    }
   }));
 
   const response = await ai.models.generateContent({

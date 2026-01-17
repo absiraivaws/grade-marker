@@ -34,7 +34,7 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
 
   const handleSubmission = async () => {
     if (!selectedAssignment || images.length === 0 || !studentName) {
-      alert("Please fill in your name and upload at least one answer image.");
+      alert("Please fill in your name and upload at least one answer file.");
       return;
     }
 
@@ -195,17 +195,23 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
               <input className="w-full bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-lg p-3 outline-none" value={studentName} onChange={e => setStudentName(e.target.value)} placeholder="Your Name" />
               
               <div>
-                <label className="block text-sm font-medium mb-1">Your Answer Images (In Order)</label>
+                <label className="block text-sm font-medium mb-1">Your Answer Files (In Order)</label>
                 <div className="flex flex-wrap gap-2 mb-4">
                   {images.map((img, idx) => (
                     <div key={idx} className="relative group w-24 h-24">
-                      <img src={img} className="w-full h-full object-cover rounded border border-slate-200" alt={`Page ${idx+1}`} />
+                      {img.startsWith('data:application/pdf') ? (
+                        <div className="w-full h-full flex items-center justify-center bg-red-100 rounded border border-red-200">
+                          <span className="text-red-700 font-bold text-xs">PDF</span>
+                        </div>
+                      ) : (
+                        <img src={img} className="w-full h-full object-cover rounded border border-slate-200" alt={`Page ${idx+1}`} />
+                      )}
                       <button onClick={() => removeImage(idx)} className="absolute -top-2 -right-2 bg-red-500 text-white w-5 h-5 rounded-full text-xs flex items-center justify-center shadow-lg">×</button>
                       <span className="absolute bottom-0 right-0 bg-black/50 text-white text-[10px] px-1 rounded-tl">{idx+1}</span>
                     </div>
                   ))}
                   <label className="w-24 h-24 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 transition-colors">
-                    <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
+                    <input type="file" accept="image/*,application/pdf" onChange={handleImageChange} className="hidden" />
                     <span className="text-xl text-slate-400">+</span>
                   </label>
                 </div>

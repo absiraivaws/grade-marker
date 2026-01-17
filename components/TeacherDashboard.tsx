@@ -224,19 +224,25 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                 <div className="flex flex-wrap gap-2 mb-4">
                   {images.map((img, idx) => (
                     <div key={idx} className="relative group w-20 h-20">
-                      <img src={img} className="w-full h-full object-cover rounded border border-slate-200" alt={`Page ${idx+1}`} />
+                      {img.startsWith('data:application/pdf') ? (
+                        <div className="w-full h-full flex items-center justify-center bg-red-100 rounded border border-red-200">
+                          <span className="text-red-700 font-bold text-[10px]">PDF</span>
+                        </div>
+                      ) : (
+                        <img src={img} className="w-full h-full object-cover rounded border border-slate-200" alt={`Page ${idx+1}`} />
+                      )}
                       <button onClick={() => removeImage(idx)} className="absolute -top-2 -right-2 bg-red-500 text-white w-5 h-5 rounded-full text-xs flex items-center justify-center shadow-lg">×</button>
                       <span className="absolute bottom-0 right-0 bg-black/50 text-white text-[10px] px-1 rounded-tl">{idx+1}</span>
                     </div>
                   ))}
                   <label className="w-20 h-20 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 transition-colors">
-                    <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
+                    <input type="file" accept="image/*,application/pdf" onChange={handleImageChange} className="hidden" />
                     <span className="text-xl text-slate-400">+</span>
                   </label>
                 </div>
                 {images.length > 0 && (
                   <button onClick={suggestMarkingPoints} disabled={loading} className="text-sm text-indigo-600 font-semibold hover:underline">
-                    {loading ? 'Analyzing...' : '✨ Suggest points from images'}
+                    {loading ? 'Analyzing...' : '✨ Suggest points from files'}
                   </button>
                 )}
               </div>
@@ -276,7 +282,13 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
               {selectedAssignment.teacherAnswerImages && (
                 <div className="grid grid-cols-2 gap-2">
                   {selectedAssignment.teacherAnswerImages.map((img, i) => (
-                    <img key={i} src={img} className="rounded border shadow-sm" alt={`Ref ${i+1}`} />
+                    img.startsWith('data:application/pdf') ? (
+                      <div key={i} className="aspect-[3/4] flex items-center justify-center bg-red-100 rounded border border-red-200">
+                        <span className="text-red-700 font-bold">PDF Reference {i+1}</span>
+                      </div>
+                    ) : (
+                      <img key={i} src={img} className="rounded border shadow-sm" alt={`Ref ${i+1}`} />
+                    )
                   ))}
                 </div>
               )}
@@ -306,10 +318,16 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
               <div className="space-y-4">
-                <h4 className="font-bold text-xs uppercase text-slate-500">Student Images</h4>
+                <h4 className="font-bold text-xs uppercase text-slate-500">Student Files</h4>
                 <div className="grid gap-4">
                   {selectedSubmission.studentAnswerImages.map((img, idx) => (
-                    <img key={idx} src={img} className="w-full rounded border" alt={`Page ${idx+1}`} />
+                    img.startsWith('data:application/pdf') ? (
+                      <div key={idx} className="w-full aspect-[3/4] flex items-center justify-center bg-red-100 rounded border border-red-200">
+                        <span className="text-red-700 font-bold">Student PDF Page {idx+1}</span>
+                      </div>
+                    ) : (
+                      <img key={idx} src={img} className="w-full rounded border" alt={`Page ${idx+1}`} />
+                    )
                   ))}
                 </div>
               </div>
