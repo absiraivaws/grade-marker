@@ -15,6 +15,8 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
   const [loading, setLoading] = useState(false);
   const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
   const [selectedSubmission, setSelectedSubmission] = useState<Submission | null>(null);
+  const [isEditingMarks, setIsEditingMarks] = useState(false);
+  const [tempScores, setTempScores] = useState<number[]>([]);
   
   const [title, setTitle] = useState('');
   const [question, setQuestion] = useState('');
@@ -81,26 +83,42 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
     setCriteria([]);
   };
 
-  const handleManualMarkChange = (submission: Submission, criterionIdx: number, newMark: number) => {
-    const assignment = assignments.find(a => a.id === submission.assignmentId);
+  const startEditing = () => {
+    if (!selectedSubmission) return;
+    const assignment = assignments.find(a => a.id === selectedSubmission.assignmentId);
     if (!assignment) return;
 
-    const currentScores = submission.criteriaScores 
-      ? [...submission.criteriaScores] 
-      : (submission.criteriasMet?.map((met, i) => met ? assignment.markingPoints[i].weight : 0) || new Array(assignment.markingPoints.length).fill(0));
+    // Initialize tempScores with existing scores or calculated scores from booleans
+    const currentScores = selectedSubmission.criteriaScores 
+      ? [...selectedSubmission.criteriaScores] 
+      : (selectedSubmission.criteriasMet?.map((met, i) => met ? assignment.markingPoints[i].weight : 0) || new Array(assignment.markingPoints.length).fill(0));
+    
+    setTempScores(currentScores);
+    setIsEditingMarks(true);
+  };
 
-    currentScores[criterionIdx] = newMark;
-    const newTotalScore = currentScores.reduce((a, b) => a + b, 0);
+  const handleTempMarkChange = (idx: number, val: number) => {
+    const next = [...tempScores];
+    next[idx] = val;
+    setTempScores(next);
+  };
 
+  const saveManualMarks = () => {
+    if (!selectedSubmission) return;
+    const assignment = assignments.find(a => a.id === selectedSubmission.assignmentId);
+    if (!assignment) return;
+
+    const newTotalScore = tempScores.reduce((a, b) => a + b, 0);
     const updatedSubmission: Submission = {
-      ...submission,
-      criteriaScores: currentScores,
+      ...selectedSubmission,
+      criteriaScores: tempScores,
       score: newTotalScore,
-      criteriasMet: currentScores.map((s, i) => s === assignment.markingPoints[i].weight)
+      criteriasMet: tempScores.map((s, i) => s === assignment.markingPoints[i].weight)
     };
 
-    setSelectedSubmission(updatedSubmission);
     onUpdateSubmission(updatedSubmission);
+    setSelectedSubmission(updatedSubmission);
+    setIsEditingMarks(false);
   };
 
   const generateDropdownOptions = (maxWeight: number) => {
@@ -113,6 +131,16 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
     }
     return Array.from(new Set(options)).sort((a, b) => a - b);
   };
+
+  const getComparisonScores = () => {
+    if (!selectedSubmission) return [];
+    const assignment = assignments.find(a => a.id === selectedSubmission.assignmentId);
+    return selectedSubmission.criteriaScores || selectedSubmission.criteriasMet?.map((met, i) => {
+      return met ? (assignment?.markingPoints[i].weight || 0) : 0;
+    }) || [];
+  };
+
+  const hasChanges = selectedSubmission && JSON.stringify(tempScores) !== JSON.stringify(getComparisonScores());
 
   return (
     <div className="space-y-8">
@@ -236,7 +264,6 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                 </div>
               )}
 
-              {/* RESTORED MARKING POINTS IN QUESTION CARD */}
               <div>
                 <h4 className="font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase text-xs tracking-wider">Marking Criteria</h4>
                 <div className="space-y-2">
@@ -257,7 +284,10 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
           <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-5xl max-h-[90vh] overflow-y-auto p-8 shadow-2xl relative border dark:border-slate-800">
             <button 
-              onClick={() => setSelectedSubmission(null)}
+              onClick={() => {
+                setSelectedSubmission(null);
+                setIsEditingMarks(false);
+              }} 
               className="absolute top-6 right-6 text-slate-400 hover:text-slate-600"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
@@ -270,7 +300,35 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                 <h3 className="text-2xl font-bold text-slate-800 dark:text-white">{selectedSubmission.studentName}</h3>
                 <p className="text-sm text-slate-500 dark:text-slate-400">Submission Review</p>
               </div>
-              <div className="ml-auto text-4xl font-black text-indigo-600 dark:text-indigo-400">{selectedSubmission.score} / {selectedSubmission.maxScore}</div>
+              <div className="ml-auto flex items-center gap-6">
+                <div className="text-4xl font-black text-indigo-600 dark:text-indigo-400">
+                  {isEditingMarks ? tempScores.reduce((a, b) => a + b, 0) : selectedSubmission.score} / {selectedSubmission.maxScore}
+                </div>
+                {!isEditingMarks ? (
+                  <button 
+                    onClick={startEditing}
+                    className="px-4 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 rounded-lg font-bold text-sm transition-colors"
+                  >
+                    Edit Marks
+                  </button>
+                ) : (
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => setIsEditingMarks(false)}
+                      className="px-4 py-2 text-slate-500 text-sm font-bold"
+                    >
+                      Cancel
+                    </button>
+                    <button 
+                      onClick={saveManualMarks}
+                      disabled={!hasChanges}
+                      className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm disabled:opacity-50"
+                    >
+                      Save Changes
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -282,32 +340,40 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
               </div>
               <div className="space-y-6">
                 <div>
-                  <h4 className="font-bold text-slate-700 dark:text-slate-300 mb-3 uppercase text-xs tracking-widest">Adjust Marks (Step 0.5)</h4>
+                  <h4 className="font-bold text-slate-700 dark:text-slate-300 mb-3 uppercase text-xs tracking-widest">Marking Breakdown</h4>
                   <div className="bg-slate-50 dark:bg-slate-800/50 rounded-2xl border dark:border-slate-700 divide-y dark:divide-slate-700">
                     {assignments.find(a => a.id === selectedSubmission.assignmentId)?.markingPoints.map((mp, idx) => {
-                      const currentScore = selectedSubmission.criteriaScores 
-                        ? (selectedSubmission.criteriaScores[idx] ?? 0)
-                        : (selectedSubmission.criteriasMet?.[idx] ? mp.weight : 0);
+                      const currentAssignedScore = selectedSubmission.criteriaScores ? selectedSubmission.criteriaScores[idx] : (selectedSubmission.criteriasMet?.[idx] ? mp.weight : 0);
+                      const displayScore = isEditingMarks ? tempScores[idx] : currentAssignedScore;
                       
                       return (
                         <div key={idx} className="w-full flex justify-between items-center p-4">
-                          <span className={`text-sm ${currentScore === 0 ? 'text-red-500' : 'text-slate-700 dark:text-slate-300'}`}>
+                          <span className={`text-sm ${displayScore === 0 ? 'text-red-500' : 'text-slate-700 dark:text-slate-300'}`}>
                             {mp.point}
                           </span>
-                          <select 
-                            value={currentScore}
-                            onChange={(e) => handleManualMarkChange(selectedSubmission, idx, parseFloat(e.target.value))}
-                            className="bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-md p-1.5 text-sm font-bold text-indigo-600 dark:text-indigo-400 outline-none focus:ring-1 focus:ring-indigo-500"
-                          >
-                            {generateDropdownOptions(mp.weight).map(val => (
-                              <option key={val} value={val}>{val} marks</option>
-                            ))}
-                          </select>
+                          
+                          {isEditingMarks ? (
+                            <select 
+                              value={displayScore}
+                              onChange={(e) => handleTempMarkChange(idx, parseFloat(e.target.value))}
+                              className="bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-md p-1.5 text-sm font-bold text-indigo-600 dark:text-indigo-400 outline-none focus:ring-1 focus:ring-indigo-500"
+                            >
+                              {generateDropdownOptions(mp.weight).map(val => (
+                                <option key={val} value={val}>{val} marks</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span className={`text-sm font-bold ${displayScore === mp.weight ? 'text-green-600 dark:text-green-400' : displayScore === 0 ? 'text-red-500' : 'text-amber-600'}`}>
+                              {displayScore} / {mp.weight}
+                            </span>
+                          )}
                         </div>
                       );
                     })}
                   </div>
-                  <p className="mt-4 text-xs text-slate-400 italic">Adjust marks via dropdown. Changes sync to the student's view instantly.</p>
+                  {isEditingMarks && (
+                    <p className="mt-4 text-xs text-indigo-500 italic">You are currently in edit mode. Click save above to apply these marks.</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -361,7 +427,10 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                 {submissions.map(s => {
                   const assign = assignments.find(a => a.id === s.assignmentId);
                   return (
-                    <tr key={s.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 group cursor-pointer" onClick={() => setSelectedSubmission(s)}>
+                    <tr key={s.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 group cursor-pointer" onClick={() => {
+                      setSelectedSubmission(s);
+                      setIsEditingMarks(false);
+                    }}>
                       <td className="px-6 py-4 font-medium text-slate-800 dark:text-slate-200">{s.studentName}</td>
                       <td className="px-6 py-4 text-slate-600 dark:text-slate-400">{assign?.title || 'Unknown'}</td>
                       <td className="px-6 py-4 font-bold text-indigo-600 dark:text-indigo-400">{s.score} / {s.maxScore}</td>
