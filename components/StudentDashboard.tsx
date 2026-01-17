@@ -182,7 +182,7 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
                 })}
               </div>
             </div>
-            <button onClick={() => setLastSubmissionResult(null)} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold">Close & Continue</button>
+            <button onClick={() => setLastSubmissionResult(null)} className="w-full py-4 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-2xl font-bold hover:opacity-90 transition-opacity">Close & Continue</button>
           </div>
         </div>
       )}

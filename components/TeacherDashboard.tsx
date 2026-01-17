@@ -295,7 +295,7 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
               <div className="space-y-2">
                 <h4 className="font-bold text-xs uppercase text-slate-500 tracking-wider">Criteria</h4>
                 {selectedAssignment.markingPoints.map((m, idx) => (
-                  <div key={idx} className="flex justify-between p-3 bg-indigo-50/50 dark:bg-indigo-950/20 rounded border border-indigo-100">
+                  <div key={idx} className="flex justify-between p-3 bg-indigo-50/50 dark:bg-indigo-950/20 rounded border border-indigo-100 dark:border-none">
                     <span className="text-sm">{m.point}</span>
                     <span className="font-bold text-indigo-600 whitespace-nowrap">+{m.weight}</span>
                   </div>
@@ -343,7 +343,7 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                     </div>
                   )}
                 </div>
-                <div className="bg-slate-50 dark:bg-slate-800 rounded-2xl border dark:border-slate-700 divide-y">
+                <div className="bg-slate-50 dark:bg-slate-800/50 rounded-2xl border dark:border-slate-700 divide-y dark:divide-slate-700">
                   {assignments.find(a => a.id === selectedSubmission.assignmentId)?.markingPoints.map((mp, idx) => {
                     const currentScore = isEditingMarks ? tempScores[idx] : (selectedSubmission.criteriaScores ? selectedSubmission.criteriaScores[idx] : (selectedSubmission.criteriasMet?.[idx] ? mp.weight : 0));
                     
