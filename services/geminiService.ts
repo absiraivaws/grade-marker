@@ -86,6 +86,7 @@ export const extractMarkingPoints = async (imageUri: string): Promise<string[]> 
   const ai = getAI();
   const prompt = "List the specific marking points from this solution (e.g., 'Correct formula', 'Substitution', 'Final answer'). Return as a JSON array of strings.";
   
+  // Use generateContent for text extraction from images
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
     contents: {
@@ -103,5 +104,6 @@ export const extractMarkingPoints = async (imageUri: string): Promise<string[]> 
     }
   });
 
-  return JSON.parse(response.text || "[]");
+  const text = response.text || "[]";
+  return JSON.parse(text);
 };

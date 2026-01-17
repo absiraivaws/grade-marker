@@ -36,14 +36,21 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
     setIsSubmitting(true);
     try {
       const grading = await analyzeAnswer(selectedAssignment, answerImage);
+      
+      // Initialize scores from AI booleans (full marks or 0)
+      const initialScores = grading.criteriasMet.map((met, idx) => 
+        met ? (selectedAssignment.markingPoints[idx]?.weight || 0) : 0
+      );
+
       const newSub: Submission = {
         id: Date.now().toString(),
         assignmentId: selectedAssignment.id,
         studentName,
         studentAnswerImage: answerImage,
-        score: grading.score,
+        score: initialScores.reduce((a, b) => a + b, 0),
         maxScore: grading.totalPossible,
         feedback: grading.feedback,
+        criteriaScores: initialScores,
         criteriasMet: grading.criteriasMet,
         gradedAt: Date.now()
       };
@@ -53,10 +60,26 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
       setAnswerImage(null);
       setStudentName('');
     } catch (err) {
+      console.error(err);
       alert("Grading failed. Please check your API key and try again.");
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const renderBreakdownItem = (point: string, score: number, max: number, idx: number) => {
+    const isFull = score === max;
+    const isNone = score === 0;
+    return (
+      <div key={idx} className="flex justify-between items-start text-sm">
+        <span className={isNone ? "text-red-500 font-medium" : "text-slate-600 dark:text-slate-400"}>
+          {point}
+        </span>
+        <span className={`font-bold ml-4 whitespace-nowrap ${isFull ? 'text-green-600 dark:text-green-400' : isNone ? 'text-red-600' : 'text-amber-600'}`}>
+          {score} / {max}
+        </span>
+      </div>
+    );
   };
 
   return (
@@ -94,19 +117,9 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
                       <div className="border-t dark:border-indigo-900/50 pt-4">
                         <h4 className="text-xs font-bold uppercase tracking-widest text-indigo-400 mb-3">Breakdown</h4>
                         <div className="space-y-2">
-                          {a.markingPoints.map((mp, idx) => {
-                            const isMet = mySub.criteriasMet?.[idx];
-                            return (
-                              <div key={idx} className="flex justify-between items-start text-sm">
-                                <span className={isMet ? "text-slate-600 dark:text-slate-400" : "text-red-500 font-medium"}>
-                                  {mp.point}
-                                </span>
-                                {!isMet && (
-                                  <span className="text-red-600 font-bold ml-4">-{mp.weight}</span>
-                                )}
-                              </div>
-                            );
-                          })}
+                          {a.markingPoints.map((mp, idx) => 
+                            renderBreakdownItem(mp.point, mySub.criteriaScores?.[idx] ?? 0, mp.weight, idx)
+                          )}
                         </div>
                       </div>
                     </div>
@@ -124,14 +137,8 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
             </div>
           );
         })}
-        {assignments.length === 0 && (
-          <div className="col-span-full py-20 text-center border-2 border-dashed dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900">
-            <p className="text-slate-400 dark:text-slate-500">No assignments posted by the teacher yet.</p>
-          </div>
-        )}
       </div>
 
-      {/* Result Modal After Submission */}
       {lastSubmissionResult && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md flex items-center justify-center z-[70] p-4">
           <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-xl p-8 shadow-2xl border dark:border-slate-800 animate-in zoom-in duration-300">
@@ -144,36 +151,35 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
                 {lastSubmissionResult.score} <span className="text-2xl text-slate-400">/ {lastSubmissionResult.maxScore}</span>
               </div>
             </div>
-
             <div className="space-y-4 mb-8">
               <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">Marking Summary</h4>
               <div className="bg-slate-50 dark:bg-slate-800/50 rounded-2xl p-6 border dark:border-slate-800 space-y-3">
                 {assignments.find(a => a.id === lastSubmissionResult.assignmentId)?.markingPoints.map((mp, idx) => {
-                  const isMet = lastSubmissionResult.criteriasMet?.[idx];
+                  const score = lastSubmissionResult.criteriaScores?.[idx] ?? 0;
+                  const isFull = score === mp.weight;
+                  const isNone = score === 0;
                   return (
                     <div key={idx} className="flex justify-between items-start">
                       <div className="flex gap-3">
-                        {isMet ? (
+                        {isFull ? (
                           <svg className="w-5 h-5 text-green-500 mt-0.5 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
-                        ) : (
+                        ) : isNone ? (
                           <svg className="w-5 h-5 text-red-500 mt-0.5 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" /></svg>
+                        ) : (
+                          <div className="w-5 h-5 bg-amber-400 rounded-full mt-0.5 flex items-center justify-center text-[10px] text-white font-bold">!</div>
                         )}
-                        <span className={`text-sm ${isMet ? 'text-slate-700 dark:text-slate-300' : 'text-red-500 font-medium'}`}>
+                        <span className={`text-sm ${isNone ? 'text-red-500 font-medium' : 'text-slate-700 dark:text-slate-300'}`}>
                           {mp.point}
                         </span>
                       </div>
-                      {!isMet && (
-                        <span className="text-red-600 font-black text-sm whitespace-nowrap">-{mp.weight}</span>
-                      )}
+                      <span className={`font-black text-sm whitespace-nowrap ${isFull ? 'text-green-600' : isNone ? 'text-red-600' : 'text-amber-600'}`}>
+                        {score} / {mp.weight}
+                      </span>
                     </div>
                   );
                 })}
               </div>
-              <div className="p-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-xl text-sm text-indigo-700 dark:text-indigo-300 italic border border-indigo-100 dark:border-indigo-900/30">
-                "{lastSubmissionResult.feedback}"
-              </div>
             </div>
-
             <button 
               onClick={() => setLastSubmissionResult(null)}
               className="w-full py-4 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-2xl font-bold hover:opacity-90 transition-opacity"
@@ -188,64 +194,26 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
           <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg p-8 shadow-2xl overflow-y-auto max-h-[90vh] border dark:border-slate-800">
             <h3 className="text-2xl font-bold mb-2 text-slate-800 dark:text-white">Submit for {selectedAssignment.title}</h3>
-            <p className="text-slate-500 dark:text-slate-400 mb-6 text-sm">Upload a clear photo of your handwritten work.</p>
-            
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Your Name</label>
-                <input 
-                  className="w-full bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-lg p-3 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
-                  value={studentName}
-                  onChange={e => setStudentName(e.target.value)}
-                  placeholder="Type your name here"
-                />
+                <input className="w-full bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-lg p-3 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" value={studentName} onChange={e => setStudentName(e.target.value)} placeholder="Type your name here" />
               </div>
-              
-              <div className="p-8 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-2xl text-center bg-slate-50 dark:bg-slate-800/50">
-                <input 
-                  type="file" 
-                  accept="image/*" 
-                  id="student-answer" 
-                  className="hidden" 
-                  onChange={handleImageChange}
-                />
+              <div className="p-8 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-2xl text-center">
+                <input type="file" accept="image/*" id="student-answer" className="hidden" onChange={handleImageChange} />
                 {!answerImage ? (
-                  <label htmlFor="student-answer" className="cursor-pointer">
-                    <div className="text-indigo-600 dark:text-indigo-400 font-bold mb-1">Click to upload photo</div>
-                    <div className="text-xs text-slate-400 dark:text-slate-500 uppercase tracking-tight">Camera or Gallery</div>
-                  </label>
+                  <label htmlFor="student-answer" className="cursor-pointer font-bold text-indigo-600">Click to upload photo</label>
                 ) : (
-                  <div className="relative group">
-                    <img src={answerImage} className="max-h-48 mx-auto rounded-lg shadow-lg border dark:border-slate-700" alt="My work" />
-                    <button 
-                      onClick={() => setAnswerImage(null)}
-                      className="absolute -top-2 -right-2 bg-red-500 text-white p-1.5 rounded-full shadow-lg hover:bg-red-600 transition-colors"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-                    </button>
+                  <div className="relative">
+                    <img src={answerImage} className="max-h-48 mx-auto rounded-lg" alt="My work" />
+                    <button onClick={() => setAnswerImage(null)} className="absolute -top-2 -right-2 bg-red-500 text-white p-1 rounded-full">×</button>
                   </div>
                 )}
               </div>
-
               <div className="flex gap-4 pt-4">
-                <button 
-                  disabled={isSubmitting}
-                  onClick={() => setSelectedAssignment(null)}
-                  className="flex-1 py-3 border dark:border-slate-700 rounded-xl font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button 
-                  disabled={isSubmitting || !answerImage || !studentName}
-                  onClick={handleSubmission}
-                  className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 dark:shadow-none disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {isSubmitting ? (
-                    <>
-                      <svg className="animate-spin h-5 w-5 text-white" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                      Grading...
-                    </>
-                  ) : 'Submit Now'}
+                <button onClick={() => setSelectedAssignment(null)} className="flex-1 py-3 border dark:border-slate-700 rounded-xl font-bold">Cancel</button>
+                <button disabled={isSubmitting || !answerImage || !studentName} onClick={handleSubmission} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold disabled:opacity-50">
+                  {isSubmitting ? 'Grading...' : 'Submit Now'}
                 </button>
               </div>
             </div>

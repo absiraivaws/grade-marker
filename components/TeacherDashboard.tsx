@@ -81,29 +81,37 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
     setCriteria([]);
   };
 
-  const toggleCriterionInReview = (submission: Submission, index: number) => {
+  const handleManualMarkChange = (submission: Submission, criterionIdx: number, newMark: number) => {
     const assignment = assignments.find(a => a.id === submission.assignmentId);
-    if (!assignment || !submission.criteriasMet) return;
+    if (!assignment) return;
 
-    const newCriteriasMet = [...submission.criteriasMet];
-    newCriteriasMet[index] = !newCriteriasMet[index];
+    const currentScores = submission.criteriaScores 
+      ? [...submission.criteriaScores] 
+      : (submission.criteriasMet?.map((met, i) => met ? assignment.markingPoints[i].weight : 0) || new Array(assignment.markingPoints.length).fill(0));
 
-    // Recalculate score
-    let newScore = 0;
-    assignment.markingPoints.forEach((mp, idx) => {
-      if (newCriteriasMet[idx]) {
-        newScore += mp.weight;
-      }
-    });
+    currentScores[criterionIdx] = newMark;
+    const newTotalScore = currentScores.reduce((a, b) => a + b, 0);
 
     const updatedSubmission: Submission = {
       ...submission,
-      criteriasMet: newCriteriasMet,
-      score: newScore
+      criteriaScores: currentScores,
+      score: newTotalScore,
+      criteriasMet: currentScores.map((s, i) => s === assignment.markingPoints[i].weight)
     };
 
     setSelectedSubmission(updatedSubmission);
     onUpdateSubmission(updatedSubmission);
+  };
+
+  const generateDropdownOptions = (maxWeight: number) => {
+    const options = [];
+    for (let i = 0; i <= maxWeight; i += 0.5) {
+      options.push(i);
+    }
+    if (options.length === 0 || options[options.length - 1] !== maxWeight) {
+      options.push(maxWeight);
+    }
+    return Array.from(new Set(options)).sort((a, b) => a - b);
   };
 
   return (
@@ -128,7 +136,7 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                 <input 
                   className="w-full bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-lg p-2.5 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none transition-colors" 
                   value={title} onChange={e => setTitle(e.target.value)} 
-                  placeholder="e.g. History Mid-Term"
+                  placeholder="e.g. Physics Quiz 1"
                 />
               </div>
               <div>
@@ -163,31 +171,22 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                 </div>
                 <div className="space-y-3">
                   {criteria.map((c, i) => (
-                    <div key={i} className="flex gap-2 items-start animate-in fade-in slide-in-from-top-1">
-                      <div className="flex-1 space-y-1">
-                        <input 
-                          className="w-full bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-lg p-2 text-sm text-slate-900 dark:text-white transition-colors focus:border-indigo-500 outline-none" 
-                          placeholder="Criterion description..." 
-                          value={c.point}
-                          onChange={e => updateCriterion(i, 'point', e.target.value)}
-                        />
-                      </div>
-                      <div className="w-20">
-                        <input 
-                          type="number" 
-                          className="w-full bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-lg p-2 text-sm text-slate-900 dark:text-white transition-colors focus:border-indigo-500 outline-none" 
-                          value={c.weight}
-                          min="0"
-                          onChange={e => updateCriterion(i, 'weight', parseInt(e.target.value) || 0)}
-                        />
-                      </div>
-                      <button 
-                        onClick={() => removeCriterion(i)}
-                        className="p-2 text-slate-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                        title="Delete criterion"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                      </button>
+                    <div key={i} className="flex gap-2 items-start">
+                      <input 
+                        className="flex-1 bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-lg p-2 text-sm text-slate-900 dark:text-white transition-colors focus:border-indigo-500 outline-none" 
+                        placeholder="Criterion description..." 
+                        value={c.point}
+                        onChange={e => updateCriterion(i, 'point', e.target.value)}
+                      />
+                      <input 
+                        type="number" 
+                        step="0.5"
+                        className="w-20 bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-lg p-2 text-sm text-slate-900 dark:text-white transition-colors focus:border-indigo-500 outline-none" 
+                        value={c.weight}
+                        min="0"
+                        onChange={e => updateCriterion(i, 'weight', parseFloat(e.target.value) || 0)}
+                      />
+                      <button onClick={() => removeCriterion(i)} className="p-2 text-red-500">×</button>
                     </div>
                   ))}
                 </div>
@@ -217,7 +216,7 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
           <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-8 shadow-2xl relative border dark:border-slate-800">
             <button 
               onClick={() => setSelectedAssignment(null)}
-              className="absolute top-6 right-6 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              className="absolute top-6 right-6 text-slate-400 hover:text-slate-600"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
@@ -237,8 +236,9 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                 </div>
               )}
 
+              {/* RESTORED MARKING POINTS IN QUESTION CARD */}
               <div>
-                <h4 className="font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase text-xs tracking-wider">Criteria</h4>
+                <h4 className="font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase text-xs tracking-wider">Marking Criteria</h4>
                 <div className="space-y-2">
                   {selectedAssignment.markingPoints.map((m, idx) => (
                     <div key={idx} className="flex justify-between items-center p-3 bg-indigo-50/50 dark:bg-indigo-950/20 rounded-lg border border-indigo-100 dark:border-indigo-900/30">
@@ -268,11 +268,9 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
               </div>
               <div>
                 <h3 className="text-2xl font-bold text-slate-800 dark:text-white">{selectedSubmission.studentName}</h3>
-                <p className="text-sm text-slate-500 dark:text-slate-400">Submission Detail</p>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Submission Review</p>
               </div>
-              <div className="ml-auto text-right">
-                <div className="text-4xl font-black text-indigo-600 dark:text-indigo-400">{selectedSubmission.score} / {selectedSubmission.maxScore}</div>
-              </div>
+              <div className="ml-auto text-4xl font-black text-indigo-600 dark:text-indigo-400">{selectedSubmission.score} / {selectedSubmission.maxScore}</div>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -284,35 +282,32 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
               </div>
               <div className="space-y-6">
                 <div>
-                  <h4 className="font-bold text-slate-700 dark:text-slate-300 mb-3 uppercase text-xs tracking-widest">Marking Breakdown (Click to Override)</h4>
+                  <h4 className="font-bold text-slate-700 dark:text-slate-300 mb-3 uppercase text-xs tracking-widest">Adjust Marks (Step 0.5)</h4>
                   <div className="bg-slate-50 dark:bg-slate-800/50 rounded-2xl border dark:border-slate-700 divide-y dark:divide-slate-700">
                     {assignments.find(a => a.id === selectedSubmission.assignmentId)?.markingPoints.map((mp, idx) => {
-                      const isMet = selectedSubmission.criteriasMet?.[idx];
+                      const currentScore = selectedSubmission.criteriaScores 
+                        ? (selectedSubmission.criteriaScores[idx] ?? 0)
+                        : (selectedSubmission.criteriasMet?.[idx] ? mp.weight : 0);
+                      
                       return (
-                        <button 
-                          key={idx} 
-                          onClick={() => toggleCriterionInReview(selectedSubmission, idx)}
-                          className="w-full flex justify-between items-center p-4 hover:bg-slate-100 dark:hover:bg-slate-800/80 transition-colors text-left group"
-                        >
-                          <span className={`text-sm ${isMet ? 'text-slate-700 dark:text-slate-300' : 'text-red-500 font-medium'}`}>
+                        <div key={idx} className="w-full flex justify-between items-center p-4">
+                          <span className={`text-sm ${currentScore === 0 ? 'text-red-500' : 'text-slate-700 dark:text-slate-300'}`}>
                             {mp.point}
                           </span>
-                          <div className="flex items-center gap-2">
-                            {isMet ? (
-                              <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 font-bold text-sm rounded shadow-sm">
-                                +{mp.weight}
-                              </span>
-                            ) : (
-                              <span className="px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 font-bold text-sm rounded shadow-sm">
-                                -{mp.weight}
-                              </span>
-                            )}
-                          </div>
-                        </button>
+                          <select 
+                            value={currentScore}
+                            onChange={(e) => handleManualMarkChange(selectedSubmission, idx, parseFloat(e.target.value))}
+                            className="bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-md p-1.5 text-sm font-bold text-indigo-600 dark:text-indigo-400 outline-none focus:ring-1 focus:ring-indigo-500"
+                          >
+                            {generateDropdownOptions(mp.weight).map(val => (
+                              <option key={val} value={val}>{val} marks</option>
+                            ))}
+                          </select>
+                        </div>
                       );
                     })}
                   </div>
-                  <p className="mt-4 text-xs text-slate-400 dark:text-slate-500 italic">Overrides are saved immediately and updated on the student's dashboard.</p>
+                  <p className="mt-4 text-xs text-slate-400 italic">Adjust marks via dropdown. Changes sync to the student's view instantly.</p>
                 </div>
               </div>
             </div>
@@ -359,7 +354,7 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                   <th className="px-6 py-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Assignment</th>
                   <th className="px-6 py-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Score</th>
                   <th className="px-6 py-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Status</th>
-                  <th className="px-6 py-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Action</th>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y dark:divide-slate-800">
@@ -369,9 +364,7 @@ const TeacherDashboard: React.FC<Props> = ({ assignments, submissions, onCreateA
                     <tr key={s.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 group cursor-pointer" onClick={() => setSelectedSubmission(s)}>
                       <td className="px-6 py-4 font-medium text-slate-800 dark:text-slate-200">{s.studentName}</td>
                       <td className="px-6 py-4 text-slate-600 dark:text-slate-400">{assign?.title || 'Unknown'}</td>
-                      <td className="px-6 py-4">
-                        <span className="font-bold text-indigo-600 dark:text-indigo-400">{s.score} / {s.maxScore}</span>
-                      </td>
+                      <td className="px-6 py-4 font-bold text-indigo-600 dark:text-indigo-400">{s.score} / {s.maxScore}</td>
                       <td className="px-6 py-4">
                         <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded">Graded</span>
                       </td>

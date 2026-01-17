@@ -26,7 +26,8 @@ export interface Submission {
   feedback: string;
   score: number;
   maxScore: number;
-  criteriasMet?: boolean[]; // Added to store breakdown
+  criteriaScores?: number[]; // Stores numerical scores per criterion
+  criteriasMet?: boolean[]; // Stores AI decision (met/not met)
   gradedAt?: number;
 }
 
