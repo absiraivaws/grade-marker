@@ -228,12 +228,12 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
       {/* Modals */}
       {selectedAssignment && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4 animate-in fade-in duration-300">
-          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-2xl p-10 shadow-2xl animate-in zoom-in-95 duration-300">
+          <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] w-full max-w-2xl p-10 shadow-2xl animate-in zoom-in-95 duration-300">
             <h3 className="text-2xl font-black mb-1">{selectedAssignment.title}</h3>
             <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-6">Template Created on {new Date(selectedAssignment.createdAt).toLocaleDateString()}</p>
 
             <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2">
-              <div className="bg-slate-50 dark:bg-slate-800/50 p-6 rounded-3xl border border-slate-100 dark:border-slate-800">
+              <div className="bg-slate-50 dark:bg-slate-700/60 p-6 rounded-3xl border border-slate-100 dark:border-slate-700">
                 <p className="text-[10px] font-black uppercase text-indigo-500 tracking-widest mb-2">Reference Question</p>
                 <p className="text-slate-600 dark:text-slate-300 font-medium leading-relaxed">{selectedAssignment.question}</p>
               </div>
@@ -270,12 +270,12 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
               </div>
             </div>
 
-            <div className="pt-8 mt-4 border-t border-slate-100 dark:border-slate-800">
+            <div className="pt-8 mt-4 border-t border-slate-100 dark:border-slate-700">
               {selectedAssignment.status === 'DRAFT' ? (
                 <div className="flex gap-4">
                   <button
                     onClick={() => setSelectedAssignment(null)}
-                    className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all active:scale-95"
+                    className="flex-1 py-4 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-600 transition-all active:scale-95"
                   >
                     Close
                   </button>
@@ -315,7 +315,7 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
 
       {showAdd && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4 animate-in fade-in duration-300">
-          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-2xl p-10 shadow-2xl overflow-y-auto max-h-[90vh] animate-in zoom-in-95 duration-300">
+          <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] w-full max-w-2xl p-10 shadow-2xl overflow-y-auto max-h-[90vh] animate-in zoom-in-95 duration-300">
             <h3 className="text-3xl font-black mb-8">Create Assignment Template</h3>
             <div className="space-y-6">
               <div className="grid grid-cols-2 gap-4">
@@ -362,7 +362,7 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
                       <button onClick={() => {
                         setReferenceImages(referenceImages.filter((_, i) => i !== idx));
                         setReferenceImageUrls(referenceImageUrls.filter((_, i) => i !== idx));
-                      }} className="absolute top-1 right-1 bg-white/90 dark:bg-slate-800/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm">✕</button>
+                      }} className="absolute top-1 right-1 bg-white/90 dark:bg-slate-700/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm">✕</button>
                     </div>
                   ))}
                   <label className="w-24 h-24 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-all hover:border-indigo-400 active:scale-95">
@@ -371,7 +371,7 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
                   </label>
                 </div>
                 {referenceImageUrls.length > 0 && criteria.length === 0 && (
-                  <button onClick={handleExtractCriteria} disabled={isExtracting} className={`w-full py-3 ${isExtracting ? 'bg-slate-100 dark:bg-slate-800 animate-pulse text-slate-400' : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'} rounded-2xl text-sm font-black uppercase tracking-widest transition-all`}>
+                  <button onClick={handleExtractCriteria} disabled={isExtracting} className={`w-full py-3 ${isExtracting ? 'bg-slate-100 dark:bg-slate-700 animate-pulse text-slate-400' : 'bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300'} rounded-2xl text-sm font-black uppercase tracking-widest transition-all`}>
                     {isExtracting ? 'AI Analyzing Reference...' : '✨ Auto-Extract Marking Points'}
                   </button>
                 )}
@@ -382,14 +382,14 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
                   <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Marking Criteria & Weights</label>
                   <div className="space-y-2">
                     {criteria.map((c, i) => (
-                      <div key={i} className="flex gap-2 items-center bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-100 dark:border-slate-800 animate-in slide-in-from-left duration-200" style={{ animationDelay: `${i * 50}ms` }}>
-                        <span className="text-xs font-black text-indigo-600 bg-white dark:bg-slate-900 w-6 h-6 rounded-lg flex items-center justify-center shadow-sm">{i + 1}</span>
+                      <div key={i} className="flex gap-2 items-center bg-slate-50 dark:bg-slate-700/60 p-3 rounded-xl border border-slate-100 dark:border-slate-700 animate-in slide-in-from-left duration-200" style={{ animationDelay: `${i * 50}ms` }}>
+                        <span className="text-xs font-black text-indigo-600 bg-white dark:bg-slate-800 w-6 h-6 rounded-lg flex items-center justify-center shadow-sm">{i + 1}</span>
                         <input className="bg-transparent border-none text-sm font-bold flex-1 focus:ring-0" value={c.point} onChange={e => {
                           const newC = [...criteria];
                           newC[i].point = e.target.value;
                           setCriteria(newC);
                         }} />
-                        <input type="number" className="w-16 bg-white dark:bg-slate-900 border-none rounded-lg text-sm font-black text-center focus:ring-1 focus:ring-indigo-500" value={c.weight} onChange={e => {
+                        <input type="number" className="w-16 bg-white dark:bg-slate-800 border-none rounded-lg text-sm font-black text-center focus:ring-1 focus:ring-indigo-500" value={c.weight} onChange={e => {
                           const newC = [...criteria];
                           newC[i].weight = parseInt(e.target.value) || 0;
                           setCriteria(newC);
@@ -403,7 +403,7 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
                         </button>
                       </div>
                     ))}
-                    <button onClick={() => setCriteria([...criteria, { point: '', weight: 1 }])} className="w-full py-2 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-400 hover:border-indigo-400 hover:text-indigo-400 transition-all">+ Add Rule</button>
+                    <button onClick={() => setCriteria([...criteria, { point: '', weight: 1 }])} className="w-full py-2 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-400 hover:border-indigo-400 hover:text-indigo-400 transition-all">+ Add Rule</button>
                   </div>
                 </div>
               )}
@@ -418,7 +418,7 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
                 <button
                   disabled={isSaving}
                   onClick={() => handleSave('DRAFT')}
-                  className="flex-1 py-4 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-2xl font-bold shadow-sm transition-all active:scale-95 disabled:opacity-50"
+                  className="flex-1 py-4 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-2xl font-bold shadow-sm transition-all active:scale-95 disabled:opacity-50"
                 >
                   {isSaving ? 'Saving...' : 'Save Draft'}
                 </button>
@@ -457,14 +457,14 @@ const TeacherOverview: React.FC<{ teacher: Teacher | null, assignments: Assignme
     <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500">
       <header>
         <h1 className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">Welcome back, {teacher.name.split(' ')[0]}!</h1>
-        <p className="text-slate-500 dark:text-slate-400 font-medium">Here's what's happening in your classes today.</p>
+        <p className="text-slate-500 dark:text-slate-300 font-medium">Here's what's happening in your classes today.</p>
       </header>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="p-8 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-xl transition-all hover:-translate-y-1">
+        <div className="p-8 bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-xl transition-all hover:-translate-y-1">
           <div className="flex justify-between items-start mb-4">
             <div className="w-12 h-12 bg-indigo-50 dark:bg-indigo-950/40 rounded-2xl flex items-center justify-center text-indigo-600 dark:text-indigo-400 text-2xl">🏫</div>
-            <span className="px-3 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg text-[10px] font-black uppercase text-slate-500 tracking-wider">My Class</span>
+            <span className="px-3 py-1 bg-slate-100 dark:bg-slate-700 rounded-lg text-[10px] font-black uppercase text-slate-500 tracking-wider">My Class</span>
           </div>
           {teacher.isClassTeacher && teacher.assignedClassId ? (
             <>
@@ -479,19 +479,19 @@ const TeacherOverview: React.FC<{ teacher: Teacher | null, assignments: Assignme
           )}
         </div>
 
-        <div className="p-8 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-xl transition-all hover:-translate-y-1">
+        <div className="p-8 bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-xl transition-all hover:-translate-y-1">
           <div className="flex justify-between items-start mb-4">
             <div className="w-12 h-12 bg-purple-50 dark:bg-purple-950/40 rounded-2xl flex items-center justify-center text-purple-600 dark:text-purple-400 text-2xl">📚</div>
-            <span className="px-3 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg text-[10px] font-black uppercase text-slate-500 tracking-wider">Subjects</span>
+            <span className="px-3 py-1 bg-slate-100 dark:bg-slate-700 rounded-lg text-[10px] font-black uppercase text-slate-500 tracking-wider">Subjects</span>
           </div>
           <p className="text-3xl font-black text-slate-900 dark:text-white mb-1">{teacher.primarySubject}</p>
           <p className="text-slate-500 font-medium text-sm">{teacher.assignedSubjects.length} Classes Assigned</p>
         </div>
 
-        <div className="p-8 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-xl transition-all hover:-translate-y-1">
+        <div className="p-8 bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-xl transition-all hover:-translate-y-1">
           <div className="flex justify-between items-start mb-4">
             <div className="w-12 h-12 bg-emerald-50 dark:bg-emerald-950/40 rounded-2xl flex items-center justify-center text-emerald-600 dark:text-emerald-400 text-2xl">📝</div>
-            <span className="px-3 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg text-[10px] font-black uppercase text-slate-500 tracking-wider">Activity</span>
+            <span className="px-3 py-1 bg-slate-100 dark:bg-slate-700 rounded-lg text-[10px] font-black uppercase text-slate-500 tracking-wider">Activity</span>
           </div>
           <p className="text-3xl font-black text-slate-900 dark:text-white mb-1">{assignments.length}</p>
           <p className="text-slate-500 font-medium text-sm">Active Assignments</p>
@@ -562,7 +562,7 @@ const MyClassView: React.FC<{ teacher: Teacher, adminId: string }> = ({ teacher,
   };
 
   return (
-    <div className="bg-white dark:bg-slate-900 rounded-[2rem] p-8 border border-slate-200 dark:border-slate-800 shadow-sm">
+    <div className="bg-white dark:bg-slate-800 rounded-[2rem] p-8 border border-slate-200 dark:border-slate-700 shadow-sm">
       <h3 className="text-xl font-bold mb-6">My Class Students</h3>
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-8">
         <input placeholder="Student Name" value={name} onChange={e => setName(e.target.value)} className="input-style" />
@@ -578,7 +578,7 @@ const MyClassView: React.FC<{ teacher: Teacher, adminId: string }> = ({ teacher,
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
         {students.map(s => (
-          <div key={s.id} className="p-5 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-transparent hover:border-indigo-500/30 transition-all group flex justify-between items-center">
+          <div key={s.id} className="p-5 bg-slate-50 dark:bg-slate-700/60 rounded-2xl border border-transparent hover:border-indigo-500/30 transition-all group flex justify-between items-center">
             <div>
               <p className="font-bold group-hover:text-indigo-600 transition-colors">{s.name}</p>
               <p className="text-xs text-slate-500 font-medium">{s.email}</p>
@@ -634,15 +634,15 @@ const SubjectClassRow: React.FC<{ subject: any, adminId: string }> = ({ subject,
   }, [subject.classId, subject.subjectId, adminId]);
 
   return (
-    <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-sm hover:border-indigo-500/30 transition-all">
+    <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 border border-slate-200 dark:border-slate-700 shadow-sm hover:border-indigo-500/30 transition-all">
       <div className="flex justify-between items-center mb-4">
         <h4 className="font-black text-indigo-600">Class {className} - {subjectName}</h4>
-        <span className="px-3 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg text-[10px] font-black uppercase text-slate-500 tracking-wider">
+        <span className="px-3 py-1 bg-slate-100 dark:bg-slate-700 rounded-lg text-[10px] font-black uppercase text-slate-500 tracking-wider">
           {students.length} Students
         </span>
       </div>
       <div className="flex flex-wrap gap-2">
-        {students.map(s => <span key={s.id} className="px-4 py-2 bg-slate-50 dark:bg-slate-800/50 rounded-xl text-xs font-bold border border-slate-100 dark:border-slate-700/50">{s.name}</span>)}
+        {students.map(s => <span key={s.id} className="px-4 py-2 bg-slate-50 dark:bg-slate-700/60 rounded-xl text-xs font-bold border border-slate-100 dark:border-slate-600/60">{s.name}</span>)}
       </div>
     </div>
   );
@@ -675,7 +675,7 @@ const TeacherGradebook: React.FC<{
       </div>
 
       {sortedAssignments.length === 0 && (
-        <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-12 text-center border border-slate-200 dark:border-slate-800">
+        <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] p-12 text-center border border-slate-200 dark:border-slate-700">
           <div className="text-5xl mb-4">📘</div>
           <p className="text-slate-500">No assignments found yet.</p>
         </div>
@@ -688,7 +688,7 @@ const TeacherGradebook: React.FC<{
           const selectedSubmission = assignmentSubmissions.find(s => s.id === selectedSubmissionId) || null;
 
           return (
-            <div key={assignment.id} className="bg-white dark:bg-slate-900 rounded-[2rem] border border-slate-200 dark:border-slate-800 shadow-sm">
+            <div key={assignment.id} className="bg-white dark:bg-slate-800 rounded-[2rem] border border-slate-200 dark:border-slate-700 shadow-sm">
               <button
                 onClick={() => toggleAssignment(assignment.id)}
                 className="w-full text-left p-6 flex items-center justify-between gap-4 hover:bg-slate-50 dark:hover:bg-slate-800/60 rounded-[2rem] transition-colors"
@@ -696,7 +696,7 @@ const TeacherGradebook: React.FC<{
                 <div className="space-y-1">
                   <h3 className="text-xl font-black text-slate-800 dark:text-white">{assignment.title}</h3>
                   <div className="text-xs font-bold text-slate-500 flex flex-wrap gap-2">
-                    <span className="px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg">
+                    <span className="px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded-lg">
                       Class {classNames[assignment.classId] || assignment.classId}
                     </span>
                     <span className="px-2 py-1 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 rounded-lg">
@@ -714,7 +714,7 @@ const TeacherGradebook: React.FC<{
               </button>
 
               {isExpanded && (
-                <div className="border-t border-slate-100 dark:border-slate-800 p-6 space-y-6">
+                <div className="border-t border-slate-100 dark:border-slate-700 p-6 space-y-6">
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     <div className="lg:col-span-1 space-y-3">
                       <h4 className="text-sm font-black uppercase tracking-widest text-slate-400">Submitted Students</h4>
@@ -728,7 +728,7 @@ const TeacherGradebook: React.FC<{
                             onClick={() => setSelectedSubmissionId(sub.id)}
                             className={`w-full text-left px-4 py-3 rounded-2xl border transition-all ${selectedSubmissionId === sub.id
                               ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300'
-                              : 'border-slate-200 dark:border-slate-800 hover:border-indigo-300 dark:hover:border-indigo-700 bg-white/50 dark:bg-slate-900'
+                              : 'border-slate-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-600 bg-white/50 dark:bg-slate-800'
                             }`}
                           >
                             <div className="font-bold">{sub.studentName || sub.studentId}</div>
@@ -742,14 +742,14 @@ const TeacherGradebook: React.FC<{
 
                     <div className="lg:col-span-2">
                       {!selectedSubmission && (
-                        <div className="h-full flex items-center justify-center text-slate-400 italic border border-dashed border-slate-200 dark:border-slate-800 rounded-3xl p-10">
+                        <div className="h-full flex items-center justify-center text-slate-400 italic border border-dashed border-slate-200 dark:border-slate-700 rounded-3xl p-10">
                           Select a student to view submission details.
                         </div>
                       )}
 
                       {selectedSubmission && (
                         <div className="space-y-6">
-                          <div className="bg-slate-50 dark:bg-slate-800/60 rounded-3xl p-6 border border-slate-100 dark:border-slate-800">
+                          <div className="bg-slate-50 dark:bg-slate-700/60 rounded-3xl p-6 border border-slate-100 dark:border-slate-700">
                             <div className="flex flex-wrap items-center justify-between gap-4">
                               <div>
                                 <h4 className="text-2xl font-black text-slate-800 dark:text-white">{selectedSubmission.studentName || selectedSubmission.studentId}</h4>
@@ -779,12 +779,12 @@ const TeacherGradebook: React.FC<{
                                   ? 'border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300'
                                   : met === false
                                     ? 'border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300'
-                                    : 'border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-900 text-slate-600 dark:text-slate-300';
+                                    : 'border-slate-200 dark:border-slate-700 bg-white/60 dark:bg-slate-800 text-slate-600 dark:text-slate-300';
 
                                 return (
                                   <div key={idx} className={`p-4 rounded-2xl border ${color} flex items-center justify-between gap-4`}>
                                     <div className="flex items-start gap-3">
-                                      <div className="w-7 h-7 rounded-lg bg-white/70 dark:bg-slate-900/80 text-xs font-black flex items-center justify-center">{idx + 1}</div>
+                                      <div className="w-7 h-7 rounded-lg bg-white/70 dark:bg-slate-800/80 text-xs font-black flex items-center justify-center">{idx + 1}</div>
                                       <div className="text-sm font-semibold leading-snug">{criterion.point}</div>
                                     </div>
                                     <div className="text-sm font-black">
@@ -814,14 +814,14 @@ export default TeacherDashboard;
 const AssignmentCard: React.FC<{ assignment: Assignment, onClick: () => void, isDraft?: boolean }> = ({ assignment, onClick, isDraft }) => (
   <div
     onClick={onClick}
-    className={`group cursor-pointer bg-white dark:bg-slate-900 border ${isDraft ? 'border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50' : 'border-slate-200 dark:border-slate-800'} rounded-3xl p-7 shadow-sm hover:shadow-xl hover:border-indigo-400 transition-all hover:-translate-y-1`}
+    className={`group cursor-pointer bg-white dark:bg-slate-800 border ${isDraft ? 'border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/60' : 'border-slate-200 dark:border-slate-700'} rounded-3xl p-7 shadow-sm hover:shadow-xl hover:border-indigo-400 transition-all hover:-translate-y-1`}
   >
     <div className={`w-12 h-12 ${isDraft ? 'bg-slate-200 dark:bg-slate-700 text-slate-500' : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'} rounded-2xl flex items-center justify-center text-xl mb-4 group-hover:scale-110 transition-transform`}>
       {isDraft ? '📝' : '📄'}
     </div>
     <h3 className="text-xl font-bold mb-2 group-hover:text-indigo-600 transition-colors line-clamp-1">{assignment.title}</h3>
     <p className="text-slate-500 text-sm line-clamp-3 mb-6 leading-relaxed">{assignment.question}</p>
-    <div className="pt-6 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs font-bold text-slate-400">
+    <div className="pt-6 border-t border-slate-100 dark:border-slate-700 flex items-center justify-between text-xs font-bold text-slate-400">
       <span>{new Date(assignment.createdAt).toLocaleDateString()}</span>
       <span className={`px-3 py-1 rounded-full text-[10px] ${isDraft ? 'bg-slate-200 text-slate-600' : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600'}`}>
         {isDraft ? 'DRAFT' : 'View Details'}

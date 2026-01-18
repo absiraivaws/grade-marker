@@ -87,8 +87,8 @@ const Auth: React.FC<Props> = ({ onAuthSuccess }) => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 p-6">
-      <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-[2.5rem] p-10 shadow-2xl border border-slate-200 dark:border-slate-800 animate-in fade-in zoom-in duration-500">
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900 p-6">
+      <div className="w-full max-w-md bg-white dark:bg-slate-800 rounded-[2.5rem] p-10 shadow-2xl border border-slate-200 dark:border-slate-700 animate-in fade-in zoom-in duration-500">
         <div className="text-center mb-10">
           <div className="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto mb-6 flex items-center justify-center text-white text-3xl font-black">G</div>
           <h2 className="text-3xl font-black text-slate-900 dark:text-white mb-2 uppercase tracking-tight">
@@ -162,7 +162,7 @@ const Auth: React.FC<Props> = ({ onAuthSuccess }) => {
         </form>
 
         {activeRole === 'ADMIN' && (
-          <div className="mt-8 pt-8 border-t border-slate-100 dark:border-slate-800 text-center">
+          <div className="mt-8 pt-8 border-t border-slate-100 dark:border-slate-700 text-center">
             <p className="text-slate-500 font-medium mb-4">
               {isLogin ? "New School?" : "Already Registered?"}
             </p>

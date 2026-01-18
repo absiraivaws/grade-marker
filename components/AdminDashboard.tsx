@@ -40,7 +40,7 @@ const AdminDashboard: React.FC<Props> = ({ adminId }) => {
     <div className="space-y-8 animate-in fade-in duration-500">
       <header>
         <h1 className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">{school.name}</h1>
-        <p className="text-slate-500 dark:text-slate-400 font-medium">Administrator Dashboard</p>
+        <p className="text-slate-500 dark:text-slate-300 font-medium">Administrator Dashboard</p>
       </header>
 
       <Routes>
@@ -128,7 +128,7 @@ const TeachersView: React.FC<{ schoolId: string }> = ({ schoolId }) => {
   const subjectsList = Array.from(new Set(teachers.map(t => t.primarySubject)));
 
   return (
-    <div className="bg-white dark:bg-slate-900 rounded-3xl p-8 border border-slate-200 dark:border-slate-800 shadow-sm animate-in slide-in-from-bottom-4 duration-300">
+    <div className="bg-white dark:bg-slate-800 rounded-3xl p-8 border border-slate-200 dark:border-slate-700 shadow-sm animate-in slide-in-from-bottom-4 duration-300">
       <div className="flex justify-between items-center mb-6">
         <h3 className="text-xl font-bold">Manage Teachers</h3>
         <select value={filterSubject} onChange={e => setFilterSubject(e.target.value)} className="input-style-sm w-auto">
@@ -151,7 +151,7 @@ const TeachersView: React.FC<{ schoolId: string }> = ({ schoolId }) => {
       </div>
       <div className="space-y-4">
         {filteredTeachers.map(t => (
-          <div key={t.id} className="flex items-center justify-between p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 hover:shadow-md transition-all">
+          <div key={t.id} className="flex items-center justify-between p-4 rounded-2xl bg-slate-50 dark:bg-slate-700/60 hover:shadow-md transition-all">
             <div>
               <p className="font-bold">{t.name}</p>
               <p className="text-sm text-slate-500">{t.email} • {t.primarySubject}</p>
@@ -192,7 +192,7 @@ const StructureView: React.FC<{ schoolId: string }> = ({ schoolId }) => {
   };
 
   return (
-    <div className="bg-white dark:bg-slate-900 rounded-3xl p-8 border border-slate-200 dark:border-slate-800 shadow-sm animate-in slide-in-from-bottom-4 duration-300">
+    <div className="bg-white dark:bg-slate-800 rounded-3xl p-8 border border-slate-200 dark:border-slate-700 shadow-sm animate-in slide-in-from-bottom-4 duration-300">
       <h3 className="text-xl font-bold mb-6">School Structure</h3>
       <div className="flex gap-4 mb-8">
         <input placeholder="Grade (e.g. Grade 6)" value={gradeName} onChange={e => setGradeName(e.target.value)} className="input-style flex-1" />
@@ -252,7 +252,7 @@ const GradeCard: React.FC<{ grade: Grade; adminId: string }> = ({ grade, adminId
   };
 
   return (
-    <div className="p-6 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 hover:border-indigo-500/30 transition-all">
+    <div className="p-6 rounded-2xl bg-slate-50 dark:bg-slate-700/60 border border-slate-200 dark:border-slate-600 hover:border-indigo-500/30 transition-all">
       <h4 className="font-black text-lg mb-4 text-indigo-600">{grade.name}</h4>
 
       <div className="space-y-6">
@@ -265,7 +265,7 @@ const GradeCard: React.FC<{ grade: Grade; adminId: string }> = ({ grade, adminId
           </div>
           <div className="flex flex-wrap gap-2">
             {subjects.map(s => (
-              <span key={s.id} className="px-3 py-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-bold text-slate-600 dark:text-slate-300">
+              <span key={s.id} className="px-3 py-1 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-xs font-bold text-slate-600 dark:text-slate-300">
                 {s.name}
               </span>
             ))}
@@ -280,7 +280,7 @@ const GradeCard: React.FC<{ grade: Grade; adminId: string }> = ({ grade, adminId
             <select
               value={selectedTeacherId}
               onChange={e => setSelectedTeacherId(e.target.value)}
-              className="text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 font-bold focus:ring-0"
+              className="text-xs bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg px-2 font-bold focus:ring-0"
             >
               <option value="">No Class Teacher</option>
               {teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -315,7 +315,7 @@ const ClassRow: React.FC<{
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 overflow-hidden">
+    <div className="bg-white dark:bg-slate-700 rounded-xl shadow-sm border border-slate-100 dark:border-slate-600 overflow-hidden">
       <div className="p-3 flex items-center justify-between">
         <span className="font-bold">{studentClass.name}</span>
         <div className="flex items-center gap-2">
@@ -345,13 +345,13 @@ const ClassRow: React.FC<{
       </div>
 
       {expanded && (
-        <div className="bg-slate-50 dark:bg-slate-900/50 p-3 border-t border-slate-100 dark:border-slate-800 grid gap-2 animate-in slide-in-from-top-2 duration-200">
+        <div className="bg-slate-50 dark:bg-slate-800/60 p-3 border-t border-slate-100 dark:border-slate-700 grid gap-2 animate-in slide-in-from-top-2 duration-200">
           <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Subject Teachers</p>
           {subjects.map(sub => (
             <div key={sub.id} className="flex items-center justify-between text-xs">
               <span className="font-bold text-slate-600 dark:text-slate-300">{sub.name}</span>
               <select
-                className="bg-white dark:bg-slate-800 border-none rounded-lg text-xs py-1 pl-2 pr-6 font-medium focus:ring-1 focus:ring-indigo-500"
+                className="bg-white dark:bg-slate-700 border-none rounded-lg text-xs py-1 pl-2 pr-6 font-medium focus:ring-1 focus:ring-indigo-500"
                 value={studentClass.subjectTeachers?.[sub.id] || ''}
                 onChange={async (e) => {
                   const tid = e.target.value;
@@ -384,7 +384,7 @@ const ClassRow: React.FC<{
 };
 
 const StatsCard = ({ label, value, color }: any) => (
-  <div className="p-8 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-xl transition-all hover:-translate-y-1">
+  <div className="p-8 bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-xl transition-all hover:-translate-y-1">
     <p className="text-slate-500 font-medium mb-1 text-sm">{label}</p>
     <p className={`text-3xl font-black text-${color}-600`}>{value}</p>
   </div>

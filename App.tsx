@@ -44,9 +44,19 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const stored = localStorage.getItem('theme');
+    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const theme = stored === 'light' || stored === 'dark' ? stored : (prefersDark ? 'dark' : 'light');
+    const root = document.documentElement;
+    if (theme === 'dark') root.classList.add('dark');
+    else root.classList.remove('dark');
+  }, []);
+
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">
         <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
       </div>
     );
@@ -153,15 +163,15 @@ const DashboardLayout: React.FC<{ user: User, role: UserRole, children: React.Re
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 transition-all duration-500">
-      <nav className="sticky top-0 z-[100] px-8 py-5 flex items-center justify-between border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl">
+    <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-200 transition-all duration-500">
+      <nav className="sticky top-0 z-[100] px-8 py-5 flex items-center justify-between border-b border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-800/80 backdrop-blur-xl">
         <div className="flex items-center gap-12">
           <div className="flex items-center gap-3 group cursor-pointer" onClick={() => navigate('/')}>
             <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black group-hover:rotate-12 transition-all">G</div>
             <span className="text-xl font-black tracking-tighter">SmartGrader<span className="text-indigo-600">AI</span></span>
           </div>
 
-          <div className="hidden md:flex items-center bg-slate-100 dark:bg-slate-800 p-1.5 rounded-2xl gap-1">
+          <div className="hidden md:flex items-center bg-slate-100 dark:bg-slate-700 p-1.5 rounded-2xl gap-1">
             {role === UserRole.ADMIN && (
               <>
                 <NavTab to="/admin" label="Overview" icon="📊" end />
@@ -187,15 +197,15 @@ const DashboardLayout: React.FC<{ user: User, role: UserRole, children: React.Re
         </div>
 
         <div className="flex items-center gap-4">
-          <div className="h-10 px-4 flex items-center gap-2 bg-slate-100 dark:bg-slate-800 rounded-xl">
+          <div className="h-10 px-4 flex items-center gap-2 bg-slate-100 dark:bg-slate-700 rounded-xl">
             <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-            <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+            <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-300">
               {role.toLowerCase()} Mode
             </span>
           </div>
           <button
             onClick={handleThemeToggle}
-            className="w-10 h-10 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl flex items-center justify-center hover:bg-slate-50 transition-colors"
+            className="w-10 h-10 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl flex items-center justify-center hover:bg-slate-50 transition-colors"
             aria-label="Toggle theme"
             title="Toggle theme"
           >
@@ -203,7 +213,7 @@ const DashboardLayout: React.FC<{ user: User, role: UserRole, children: React.Re
           </button>
           <button
             onClick={handleLogout}
-            className="w-10 h-10 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl flex items-center justify-center hover:bg-slate-50 transition-colors text-red-500 dark:text-red-400"
+            className="w-10 h-10 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl flex items-center justify-center hover:bg-slate-50 transition-colors text-red-500 dark:text-red-400"
           >
             <svg
               viewBox="0 0 24 24"
@@ -235,7 +245,7 @@ const NavTab: React.FC<{ to: string, label: string, icon: string, end?: boolean 
     end={end}
     className={({ isActive }) => `flex items-center gap-2.5 px-6 py-3 rounded-xl text-sm font-bold transition-all ${isActive
       ? 'bg-white dark:bg-slate-700 text-indigo-600 shadow-xl shadow-indigo-100 dark:shadow-none'
-      : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+      : 'text-slate-500 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-200'
       }`}
   >
     <span>{icon}</span>
