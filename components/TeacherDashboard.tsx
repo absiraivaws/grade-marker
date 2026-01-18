@@ -1,373 +1,517 @@
 
-import React, { useState, useMemo } from 'react';
-import { Assignment, Submission, MarkingCriterion } from '../types';
+import React, { useState, useEffect } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import { Assignment, Submission, MarkingCriterion, Teacher, Student, Subject } from '../types';
+import { dbService } from '../services/dbService';
 import { extractMarkingPoints } from '../services/geminiService';
 
 interface Props {
-  activeTab: string;
+  teacherId: string;
+  adminId: string;
   assignments: Assignment[];
   submissions: Submission[];
   onCreateAssignment: (a: Assignment) => void;
   onUpdateSubmission: (s: Submission) => void;
 }
 
-const TeacherDashboard: React.FC<Props> = ({ activeTab, assignments, submissions, onCreateAssignment, onUpdateSubmission }) => {
+const TeacherDashboard: React.FC<Props> = ({ teacherId, adminId, assignments, submissions, onCreateAssignment, onUpdateSubmission }) => {
+  const [teacher, setTeacher] = useState<Teacher | null>(null);
   const [showAdd, setShowAdd] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [selectedSubmission, setSelectedSubmission] = useState<Submission | null>(null);
   const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
-  const [isEditingMarks, setIsEditingMarks] = useState(false);
-  
+
   // Create Assignment State
   const [title, setTitle] = useState('');
   const [question, setQuestion] = useState('');
-  const [images, setImages] = useState<string[]>([]);
+  const [referenceImages, setReferenceImages] = useState<string[]>([]);
   const [criteria, setCriteria] = useState<MarkingCriterion[]>([]);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [selectedSubjectId, setSelectedSubjectId] = useState('');
+  const [selectedClassId, setSelectedClassId] = useState('');
+
+  // Load Teacher Profile
+  useEffect(() => {
+    const fetchProfile = async () => {
+      const allTeachers = await dbService.getTeachers(adminId);
+      const profile = allTeachers.find(t => t.id === teacherId);
+      if (profile) setTeacher(profile);
+    };
+    fetchProfile();
+  }, [teacherId, adminId]);
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => setImages(prev => [...prev, reader.result as string]);
+      reader.onloadend = () => setReferenceImages(prev => [...prev, reader.result as string]);
       reader.readAsDataURL(file);
     }
-    e.target.value = "";
   };
 
-  const suggestMarkingPoints = async () => {
-    if (images.length === 0) return;
-    setLoading(true);
+  const handleExtractCriteria = async () => {
+    if (referenceImages.length === 0) return;
+    setIsExtracting(true);
     try {
-      const points = await extractMarkingPoints(images);
+      const points = await extractMarkingPoints(referenceImages);
       setCriteria(points.map(p => ({ point: p, weight: 1 })));
     } catch (err) {
-      alert("Could not extract points.");
+      alert("Failed to extract criteria");
     } finally {
-      setLoading(false);
+      setIsExtracting(false);
     }
   };
 
   const handleSubmitAssignment = () => {
+    if (!title || !question || !selectedSubjectId || !selectedClassId) {
+      alert("Please fill all details and select a class/subject");
+      return;
+    }
+
     const newA: Assignment = {
       id: Date.now().toString(),
-      title, question, teacherAnswerImages: images,
-      markingPoints: criteria, createdAt: Date.now()
+      title, question,
+      teacherAnswerImages: referenceImages,
+      markingPoints: criteria,
+      createdAt: Date.now(),
+      gradeId: 'extracted-from-class', // Simplified
+      classId: selectedClassId,
+      subjectId: selectedSubjectId,
+      teacherId
     };
     onCreateAssignment(newA);
     setShowAdd(false);
-    setTitle(''); setQuestion(''); setImages([]); setCriteria([]);
+    setTitle(''); setQuestion(''); setCriteria([]); setReferenceImages([]);
   };
 
-  const studentStats = useMemo(() => {
-    const map = new Map();
-    submissions.forEach(s => {
-      if (!map.has(s.studentName)) map.set(s.studentName, { count: 0, total: 0, max: 0 });
-      const stats = map.get(s.studentName);
-      stats.count++;
-      stats.total += s.score;
-      stats.max += s.maxScore;
-    });
-    return Array.from(map.entries()).map(([name, stats]) => ({
-      name,
-      avg: stats.max > 0 ? ((stats.total / stats.max) * 100).toFixed(1) : "0.0",
-      submissions: stats.count
-    }));
-  }, [submissions]);
-
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      {activeTab === 'assignments' && (
-        <div className="space-y-8">
-          <div className="flex justify-between items-end">
-            <div>
-              <h2 className="text-3xl font-black text-slate-800 dark:text-white tracking-tight">Assignments</h2>
-              <p className="text-slate-500 font-medium">Create and manage your grading templates</p>
-            </div>
-            <button onClick={() => setShowAdd(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-2xl font-bold shadow-xl shadow-indigo-200 dark:shadow-none transition-all hover:-translate-y-1">
-              + Create Template
-            </button>
-          </div>
+    <div className="space-y-8 animate-in fade-in duration-500">
+      <Routes>
+        <Route path="/" element={<TeacherOverview teacher={teacher} assignments={assignments} submissions={submissions} />} />
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {assignments.map(a => (
-              <div 
-                key={a.id} 
-                onClick={() => setSelectedAssignment(a)}
-                className="group cursor-pointer bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-7 shadow-sm hover:shadow-xl hover:border-indigo-400 transition-all"
-              >
-                <div className="flex justify-between items-start mb-4">
-                  <div className="w-12 h-12 bg-indigo-50 dark:bg-indigo-950/40 rounded-2xl flex items-center justify-center text-indigo-600 dark:text-indigo-400 text-xl">📄</div>
-                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-md">
-                    {a.markingPoints.length} Points
-                  </span>
-                </div>
-                <h3 className="text-xl font-bold mb-2 group-hover:text-indigo-600 transition-colors">{a.title}</h3>
-                <p className="text-slate-500 text-sm line-clamp-3 mb-6 leading-relaxed">{a.question}</p>
-                <div className="pt-6 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-400">{new Date(a.createdAt).toLocaleDateString()}</span>
-                  <div className="flex -space-x-2">
-                    <div className="px-3 py-1 bg-indigo-50 dark:bg-indigo-950/40 rounded-full text-[10px] font-bold text-indigo-600 dark:text-indigo-400">View Details</div>
+        <Route path="/assignments" element={
+          <div className="space-y-8">
+            <div className="flex justify-between items-end">
+              <div>
+                <h2 className="text-3xl font-black text-slate-800 dark:text-white tracking-tight">Assignments</h2>
+                <p className="text-slate-500 font-medium">Create and manage your grading templates</p>
+              </div>
+              <button onClick={() => setShowAdd(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-2xl font-bold transition-all hover:-translate-y-1 active:scale-95 shadow-lg shadow-indigo-200 dark:shadow-none">
+                + Create Template
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {assignments.map(a => (
+                <div
+                  key={a.id}
+                  onClick={() => setSelectedAssignment(a)}
+                  className="group cursor-pointer bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-7 shadow-sm hover:shadow-xl hover:border-indigo-400 transition-all hover:-translate-y-1"
+                >
+                  <div className="w-12 h-12 bg-indigo-50 dark:bg-indigo-950/40 rounded-2xl flex items-center justify-center text-indigo-600 dark:text-indigo-400 text-xl mb-4 group-hover:scale-110 transition-transform">📄</div>
+                  <h3 className="text-xl font-bold mb-2 group-hover:text-indigo-600 transition-colors line-clamp-1">{a.title}</h3>
+                  <p className="text-slate-500 text-sm line-clamp-3 mb-6 leading-relaxed">{a.question}</p>
+                  <div className="pt-6 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs font-bold text-slate-400">
+                    <span>{new Date(a.createdAt).toLocaleDateString()}</span>
+                    <span className="px-3 py-1 bg-indigo-50 dark:bg-indigo-950/40 rounded-full text-[10px] text-indigo-600">View Details</span>
                   </div>
                 </div>
-              </div>
-            ))}
-            {assignments.length === 0 && (
-              <div className="col-span-full py-20 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-[2rem] text-center">
-                <p className="text-slate-400 font-bold">No assignments yet. Click create to start!</p>
-              </div>
+              ))}
+            </div>
+          </div>
+        } />
+
+        <Route path="/grades" element={
+          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-12 text-center border border-slate-200 dark:border-slate-800 animate-in zoom-in-95 duration-300">
+            <div className="text-6xl mb-6">🏆</div>
+            <h2 className="text-3xl font-black mb-4">Gradebook</h2>
+            <p className="text-slate-500 max-w-md mx-auto">This section will visualize class performance and student grades once assignments are graded.</p>
+          </div>
+        } />
+
+        <Route path="/students" element={
+          <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-300">
+            <h2 className="text-3xl font-black text-slate-800 dark:text-white tracking-tight">Student Management</h2>
+            {teacher?.isClassTeacher && (
+              <MyClassView teacher={teacher} adminId={adminId} />
             )}
+            <SubjectStudentsView teacher={teacher} adminId={adminId} />
           </div>
-        </div>
-      )}
+        } />
 
-      {activeTab === 'grades' && (
-        <div className="space-y-6">
-          <div className="flex justify-between items-end">
-            <div>
-              <h2 className="text-3xl font-black text-slate-800 dark:text-white tracking-tight">Gradebook</h2>
-              <p className="text-slate-500 font-medium">Consolidated view of all student performance</p>
-            </div>
-          </div>
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-[2rem] overflow-hidden shadow-sm">
-            <table className="w-full text-left">
-              <thead className="bg-slate-50/50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800">
-                <tr>
-                  <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest">Student</th>
-                  <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest">Assignment</th>
-                  <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest">Result</th>
-                  <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Review</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {submissions.map(s => (
-                  <tr key={s.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
-                    <td className="px-8 py-5 font-bold text-slate-700 dark:text-slate-200">{s.studentName}</td>
-                    <td className="px-8 py-5 text-slate-500">{assignments.find(a => a.id === s.assignmentId)?.title || 'Deleted'}</td>
-                    <td className="px-8 py-5">
-                      <span className="px-3 py-1 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg font-black text-sm">
-                        {s.score} / {s.maxScore}
-                      </span>
-                    </td>
-                    <td className="px-8 py-5 text-right">
-                      <button onClick={() => { setSelectedSubmission(s); setIsEditingMarks(false); }} className="text-sm font-bold text-indigo-600 hover:text-indigo-700">Open Details</button>
-                    </td>
-                  </tr>
-                ))}
-                {submissions.length === 0 && (
-                  <tr><td colSpan={4} className="px-8 py-12 text-center text-slate-400 font-bold italic">No submissions yet</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+        <Route path="*" element={<Navigate to="/teacher" replace />} />
+      </Routes>
 
-      {activeTab === 'students' && (
-        <div className="space-y-6">
-           <h2 className="text-3xl font-black text-slate-800 dark:text-white tracking-tight">Student Roster</h2>
-           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-             {studentStats.map(stat => (
-               <div key={stat.name} className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm">
-                 <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-full mb-4"></div>
-                 <h3 className="font-black text-lg">{stat.name}</h3>
-                 <div className="mt-4 flex justify-between items-center">
-                    <div className="text-center">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase">Submissions</p>
-                      <p className="text-xl font-black">{stat.submissions}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase">Avg Score</p>
-                      <p className="text-xl font-black text-emerald-500">{stat.avg}%</p>
-                    </div>
-                 </div>
-               </div>
-             ))}
-             {studentStats.length === 0 && (
-               <div className="col-span-full py-20 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-[2rem] text-center">
-                 <p className="text-slate-400 font-bold">No students registered yet.</p>
-               </div>
-             )}
-           </div>
-        </div>
-      )}
-
-      {/* VIEW ASSIGNMENT MODAL */}
+      {/* Modals */}
       {selectedAssignment && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-4xl max-h-[90vh] overflow-y-auto p-10 shadow-2xl border border-white/10 relative">
-            <button onClick={() => setSelectedAssignment(null)} className="absolute top-8 right-8 text-slate-400 hover:text-slate-600 text-xl font-black">✕</button>
-            <div className="mb-10">
-              <h3 className="text-3xl font-black tracking-tight mb-2">{selectedAssignment.title}</h3>
-              <p className="text-slate-500 font-medium">Template Details & Marking Key</p>
-            </div>
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4 animate-in fade-in duration-300">
+          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-2xl p-10 shadow-2xl animate-in zoom-in-95 duration-300">
+            <h3 className="text-2xl font-black mb-1">{selectedAssignment.title}</h3>
+            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-6">Template Created on {new Date(selectedAssignment.createdAt).toLocaleDateString()}</p>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-              <div className="space-y-6">
-                <div>
-                  <h4 className="text-xs font-black uppercase text-slate-400 tracking-widest mb-4">Prompt Context</h4>
-                  <div className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-700 text-sm leading-relaxed whitespace-pre-wrap">
-                    {selectedAssignment.question}
-                  </div>
-                </div>
-                
-                {selectedAssignment.teacherAnswerImages && selectedAssignment.teacherAnswerImages.length > 0 && (
-                  <div>
-                    <h4 className="text-xs font-black uppercase text-slate-400 tracking-widest mb-4">Reference Solution Files</h4>
-                    <div className="grid grid-cols-2 gap-3">
-                      {selectedAssignment.teacherAnswerImages.map((img, idx) => (
-                        <div key={idx} className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm aspect-video bg-slate-100 dark:bg-slate-800">
-                           {img.startsWith('data:application/pdf') ? (
-                             <div className="w-full h-full flex flex-col items-center justify-center gap-2">
-                               <span className="text-red-500 text-2xl">📄</span>
-                               <span className="text-[10px] font-black text-slate-400">PDF PAGE {idx + 1}</span>
-                             </div>
-                           ) : (
-                             <img src={img} className="w-full h-full object-cover" />
-                           )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+            <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2">
+              <div className="bg-slate-50 dark:bg-slate-800/50 p-6 rounded-3xl border border-slate-100 dark:border-slate-800">
+                <p className="text-[10px] font-black uppercase text-indigo-500 tracking-widest mb-2">Reference Question</p>
+                <p className="text-slate-600 dark:text-slate-300 font-medium leading-relaxed">{selectedAssignment.question}</p>
               </div>
 
-              <div className="space-y-6">
-                <h4 className="text-xs font-black uppercase text-slate-400 tracking-widest">Marking Criteria</h4>
-                <div className="bg-white dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800 rounded-3xl divide-y divide-slate-100 dark:divide-slate-800 overflow-hidden">
-                  {selectedAssignment.markingPoints.map((mp, idx) => (
-                    <div key={idx} className="p-5 flex justify-between items-center group">
-                      <div className="flex gap-4 items-center">
-                        <span className="w-6 h-6 rounded-full bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center text-[10px] font-black">{idx + 1}</span>
-                        <span className="text-sm font-bold text-slate-700 dark:text-slate-200">{mp.point}</span>
+              <div className="space-y-4">
+                <div className="flex justify-between items-end">
+                  <h4 className="text-xl font-black">Student Submissions</h4>
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{submissions.filter(s => s.assignmentId === selectedAssignment.id).length} Total</span>
+                </div>
+
+                <div className="space-y-3">
+                  {submissions.filter(s => s.assignmentId === selectedAssignment.id).map(sub => (
+                    <div key={sub.id} className="p-6 bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                      <div className="flex justify-between items-center mb-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-indigo-100 dark:bg-indigo-950/40 rounded-xl flex items-center justify-center text-lg">👤</div>
+                          <div>
+                            <p className="font-bold">{sub.studentName}</p>
+                            <p className="text-[10px] text-slate-400 font-black uppercase">Result: {sub.score}/{sub.maxScore}</p>
+                          </div>
+                        </div>
+                        <div className={`px-4 py-2 rounded-xl text-lg font-black ${sub.score / sub.maxScore > 0.7 ? 'text-emerald-500 bg-emerald-50 dark:bg-emerald-950/40' : 'text-amber-500 bg-amber-50 dark:bg-amber-950/40'}`}>
+                          {Math.round((sub.score / sub.maxScore) * 100)}%
+                        </div>
                       </div>
-                      <span className="px-3 py-1 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg font-black text-xs whitespace-nowrap">
-                        +{mp.weight}
-                      </span>
+
+                      <div className="bg-slate-50 dark:bg-slate-900/50 p-4 rounded-2xl text-xs font-medium text-slate-500 dark:text-slate-400 border border-slate-100 dark:border-slate-800 italic">
+                        "{sub.feedback}"
+                      </div>
                     </div>
                   ))}
-                  <div className="p-5 bg-indigo-50/20 dark:bg-indigo-900/10 flex justify-between items-center">
-                    <span className="text-xs font-black uppercase text-slate-400 tracking-widest">Total Weight</span>
-                    <span className="text-lg font-black text-indigo-600 dark:text-indigo-400">
-                      {selectedAssignment.markingPoints.reduce((sum, mp) => sum + mp.weight, 0)}
-                    </span>
-                  </div>
+                  {submissions.filter(s => s.assignmentId === selectedAssignment.id).length === 0 && (
+                    <div className="py-10 text-center border-2 border-dashed border-slate-100 dark:border-slate-800 rounded-3xl text-slate-400 font-bold italic">
+                      No submissions yet.
+                    </div>
+                  )}
                 </div>
               </div>
+            </div>
+
+            <div className="pt-8 mt-4 border-t border-slate-100 dark:border-slate-800">
+              <button
+                onClick={() => setSelectedAssignment(null)}
+                className="w-full py-4 bg-slate-900 dark:bg-indigo-600 text-white rounded-2xl font-black shadow-xl transition-all active:scale-95"
+              >
+                Return to Dashboard
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* CREATE ASSIGNMENT MODAL */}
       {showAdd && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-2xl max-h-[90vh] overflow-y-auto p-10 shadow-2xl border border-white/10">
-            <h3 className="text-3xl font-black mb-8">Create Assignment</h3>
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4 animate-in fade-in duration-300">
+          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-2xl p-10 shadow-2xl overflow-y-auto max-h-[90vh] animate-in zoom-in-95 duration-300">
+            <h3 className="text-3xl font-black mb-8">Create Assignment Template</h3>
             <div className="space-y-6">
-              <div className="space-y-1">
-                <label className="text-xs font-black uppercase text-slate-400 tracking-widest pl-1">Title</label>
-                <input className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-2xl p-4 text-slate-900 dark:text-white outline-none focus:ring-2 ring-indigo-500" value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Physics Midterm - Unit 1" />
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Class</label>
+                  <select className="input-style" value={selectedClassId} onChange={e => setSelectedClassId(e.target.value)}>
+                    <option value="">Select Class</option>
+                    {teacher?.assignedClassId && <option value={teacher.assignedClassId}>My Class ({teacher.assignedClassId})</option>}
+                    {teacher?.assignedSubjects.map((s, i) => (
+                      <option key={i} value={s.classId}>Class {s.classId} ({s.subjectId})</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Subject</label>
+                  <select className="input-style" value={selectedSubjectId} onChange={e => setSelectedSubjectId(e.target.value)}>
+                    <option value="">Select Subject</option>
+                    {teacher?.primarySubject && <option value={teacher.primarySubject}>{teacher.primarySubject}</option>}
+                    {teacher?.assignedSubjects.map((s, i) => (
+                      <option key={i} value={s.subjectId}>{s.subjectId}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
-              <div className="space-y-1">
-                <label className="text-xs font-black uppercase text-slate-400 tracking-widest pl-1">Prompt / Question</label>
-                <textarea className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-2xl p-4 text-slate-900 dark:text-white outline-none h-32 focus:ring-2 ring-indigo-500" value={question} onChange={e => setQuestion(e.target.value)} placeholder="Enter the question text for AI context..." />
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Assignment Title</label>
+                <input className="input-style" placeholder="Ex: Physics Mid-term" value={title} onChange={e => setTitle(e.target.value)} />
               </div>
-              
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Question / Instructions</label>
+                <textarea className="input-style h-40" placeholder="Enter the full question text here..." value={question} onChange={e => setQuestion(e.target.value)} />
+              </div>
+
               <div className="space-y-4">
-                <div className="flex justify-between items-center"><label className="text-xs font-black uppercase text-slate-400 tracking-widest pl-1">Reference Answer Files</label></div>
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Correct Solution (Reference Images)</label>
                 <div className="flex flex-wrap gap-3">
-                  {images.map((img, idx) => (
-                    <div key={idx} className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 shadow-sm">
-                      {img.startsWith('data:application/pdf') ? <div className="w-full h-full bg-red-50 flex items-center justify-center font-bold text-red-500 text-xs">PDF</div> : <img src={img} className="w-full h-full object-cover" />}
-                      <button onClick={() => setImages(images.filter((_, i) => i !== idx))} className="absolute top-1 right-1 bg-white dark:bg-slate-800 rounded-full w-5 h-5 text-[10px] shadow-md">✕</button>
+                  {referenceImages.map((img, idx) => (
+                    <div key={idx} className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm animate-in zoom-in duration-200">
+                      <img src={img} className="w-full h-full object-cover" />
+                      <button onClick={() => setReferenceImages(referenceImages.filter((_, i) => i !== idx))} className="absolute top-1 right-1 bg-white/90 dark:bg-slate-800/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm">✕</button>
                     </div>
                   ))}
-                  <label className="w-24 h-24 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl flex items-center justify-center cursor-pointer hover:bg-slate-50 transition-colors">
-                    <input type="file" accept="image/*,application/pdf" onChange={handleImageChange} className="hidden" />
-                    <span className="text-2xl text-slate-400">+</span>
+                  <label className="w-24 h-24 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-all hover:border-indigo-400 active:scale-95">
+                    <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
+                    <span className="text-3xl text-slate-300 font-light">+</span>
                   </label>
                 </div>
-                {images.length > 0 && <button onClick={suggestMarkingPoints} disabled={loading} className="text-sm font-bold text-indigo-600 hover:text-indigo-700">{loading ? 'Working...' : '✨ Suggest marking points from file'}</button>}
+                {referenceImages.length > 0 && criteria.length === 0 && (
+                  <button onClick={handleExtractCriteria} disabled={isExtracting} className={`w-full py-3 ${isExtracting ? 'bg-slate-100 dark:bg-slate-800 animate-pulse text-slate-400' : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'} rounded-2xl text-sm font-black uppercase tracking-widest transition-all`}>
+                    {isExtracting ? 'AI Analyzing Reference...' : '✨ Auto-Extract Marking Points'}
+                  </button>
+                )}
               </div>
 
-              <div className="space-y-4">
-                <div className="flex justify-between items-center"><label className="text-xs font-black uppercase text-slate-400 tracking-widest pl-1">Marking Rubric</label><button onClick={() => setCriteria([...criteria, { point: '', weight: 1 }])} className="text-xs font-bold text-indigo-600">+ Add Item</button></div>
+              {criteria.length > 0 && (
                 <div className="space-y-3">
-                  {criteria.map((c, i) => (
-                    <div key={i} className="flex gap-3 items-center">
-                      <input className="flex-1 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl p-3 text-sm" value={c.point} onChange={e => { const n = [...criteria]; n[i].point = e.target.value; setCriteria(n); }} placeholder="Criteria description" />
-                      <input type="number" step="0.5" className="w-20 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl p-3 text-sm font-bold" value={c.weight} onChange={e => { const n = [...criteria]; n[i].weight = parseFloat(e.target.value) || 0; setCriteria(n); }} />
-                      <button onClick={() => setCriteria(criteria.filter((_, idx) => idx !== i))} className="text-slate-300 hover:text-red-500 transition-colors">✕</button>
-                    </div>
-                  ))}
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Marking Criteria & Weights</label>
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
+                    {criteria.map((c, i) => (
+                      <div key={i} className="flex gap-2 items-center bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-100 dark:border-slate-800 animate-in slide-in-from-left duration-200" style={{ animationDelay: `${i * 50}ms` }}>
+                        <span className="text-xs font-black text-indigo-600 bg-white dark:bg-slate-900 w-6 h-6 rounded-lg flex items-center justify-center shadow-sm">{i + 1}</span>
+                        <input className="bg-transparent border-none text-sm font-bold flex-1 focus:ring-0" value={c.point} onChange={e => {
+                          const newC = [...criteria];
+                          newC[i].point = e.target.value;
+                          setCriteria(newC);
+                        }} />
+                        <input type="number" className="w-16 bg-white dark:bg-slate-900 border-none rounded-lg text-sm font-black text-center focus:ring-1 focus:ring-indigo-500" value={c.weight} onChange={e => {
+                          const newC = [...criteria];
+                          newC[i].weight = parseInt(e.target.value) || 0;
+                          setCriteria(newC);
+                        }} />
+                      </div>
+                    ))}
+                    <button onClick={() => setCriteria([...criteria, { point: '', weight: 1 }])} className="w-full py-2 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-400 hover:border-indigo-400 hover:text-indigo-400 transition-all">+ Add Rule</button>
+                  </div>
                 </div>
-              </div>
+              )}
 
-              <div className="flex gap-4 pt-8 border-t border-slate-100 dark:border-slate-800">
-                <button onClick={() => setShowAdd(false)} className="flex-1 py-4 font-bold text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-2xl transition-colors">Discard</button>
-                <button onClick={handleSubmitAssignment} disabled={!title || criteria.length === 0} className="flex-1 py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-bold shadow-xl shadow-indigo-100 dark:shadow-none disabled:opacity-50 disabled:shadow-none">Save Assignment</button>
+              <div className="flex gap-4 pt-8">
+                <button
+                  onClick={() => setShowAdd(false)}
+                  className="flex-1 py-4 text-slate-500 font-bold hover:bg-slate-50 dark:hover:bg-slate-800 rounded-2xl transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSubmitAssignment}
+                  className="flex-[2] py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 dark:shadow-none transition-all active:scale-95"
+                >
+                  Publish Template
+                </button>
               </div>
             </div>
           </div>
         </div>
       )}
+    </div>
+  );
+};
 
-      {selectedSubmission && (
-        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xl flex items-center justify-center z-[210] p-6">
-          <div className="bg-white dark:bg-slate-900 rounded-[3rem] w-full max-w-6xl max-h-[90vh] overflow-y-auto p-12 shadow-2xl relative border border-white/5">
-             <button onClick={() => setSelectedSubmission(null)} className="absolute top-10 right-10 text-slate-400 hover:text-slate-600 transition-colors text-2xl font-black">✕</button>
-             <div className="flex items-center gap-6 mb-10">
-               <div className="w-16 h-16 bg-gradient-to-tr from-indigo-500 to-purple-500 rounded-3xl flex items-center justify-center text-white text-3xl">🎓</div>
-               <div>
-                 <h3 className="text-3xl font-black tracking-tight">{selectedSubmission.studentName}</h3>
-                 <p className="text-slate-500 font-medium">Submission for {assignments.find(a => a.id === selectedSubmission.assignmentId)?.title}</p>
-               </div>
-               <div className="ml-auto text-center px-8 py-4 bg-indigo-50 dark:bg-indigo-950/40 rounded-3xl border border-indigo-100 dark:border-indigo-900/30">
-                 <p className="text-[10px] font-black uppercase text-indigo-400 tracking-widest mb-1">Final Score</p>
-                 <p className="text-4xl font-black text-indigo-600 dark:text-indigo-400">{selectedSubmission.score} <span className="text-lg opacity-50">/ {selectedSubmission.maxScore}</span></p>
-               </div>
-             </div>
+const TeacherOverview: React.FC<{ teacher: Teacher | null, assignments: Assignment[], submissions: Submission[] }> = ({ teacher, assignments, submissions }) => {
+  const [className, setClassName] = useState<string>('');
 
-             <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
-               <div className="space-y-6">
-                 <h4 className="text-xs font-black uppercase text-slate-400 tracking-widest pl-1">Student's Work</h4>
-                 <div className="space-y-4">
-                   {selectedSubmission.studentAnswerImages.map((img, i) => (
-                     <div key={i} className="rounded-3xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                       {img.startsWith('data:application/pdf') ? <div className="aspect-[3/4] bg-red-50 flex items-center justify-center font-bold text-red-500">Student PDF Page {i+1}</div> : <img src={img} className="w-full" />}
-                     </div>
-                   ))}
-                 </div>
-               </div>
-               <div className="space-y-8">
-                 <div className="space-y-4">
-                    <h4 className="text-xs font-black uppercase text-slate-400 tracking-widest pl-1">AI Feedback</h4>
-                    <div className="p-6 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-3xl italic text-slate-600 dark:text-slate-300 leading-relaxed font-medium">
-                      "{selectedSubmission.feedback}"
-                    </div>
-                 </div>
-                 <div className="space-y-4">
-                   <div className="flex justify-between items-center"><h4 className="text-xs font-black uppercase text-slate-400 tracking-widest pl-1">Points Breakdown</h4></div>
-                   <div className="bg-white dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800 rounded-3xl divide-y divide-slate-100 dark:divide-slate-800 overflow-hidden">
-                     {assignments.find(a => a.id === selectedSubmission.assignmentId)?.markingPoints.map((mp, idx) => {
-                       const val = selectedSubmission.criteriaScores?.[idx] ?? (selectedSubmission.criteriasMet?.[idx] ? mp.weight : 0);
-                       const isCorrect = val === mp.weight;
-                       return (
-                         <div key={idx} className="p-6 flex justify-between items-center group">
-                            <span className="text-sm font-bold text-slate-700 dark:text-slate-300 flex-1">{mp.point}</span>
-                            <span className={`px-4 py-1.5 rounded-full text-xs font-black ${isCorrect ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>
-                              {val} / {mp.weight}
-                            </span>
-                         </div>
-                       );
-                     })}
-                   </div>
-                 </div>
-               </div>
-             </div>
+  useEffect(() => {
+    const fetchClassName = async () => {
+      if (teacher?.assignedClassId && teacher.schoolId) {
+        const cls = await dbService.getClass(teacher.schoolId, teacher.assignedClassId);
+        if (cls) setClassName(cls.name);
+      }
+    };
+    fetchClassName();
+  }, [teacher]);
+
+  if (!teacher) return null;
+
+  return (
+    <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500">
+      <header>
+        <h1 className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">Welcome back, {teacher.name.split(' ')[0]}!</h1>
+        <p className="text-slate-500 dark:text-slate-400 font-medium">Here's what's happening in your classes today.</p>
+      </header>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="p-8 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-xl transition-all hover:-translate-y-1">
+          <div className="flex justify-between items-start mb-4">
+            <div className="w-12 h-12 bg-indigo-50 dark:bg-indigo-950/40 rounded-2xl flex items-center justify-center text-indigo-600 dark:text-indigo-400 text-2xl">🏫</div>
+            <span className="px-3 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg text-[10px] font-black uppercase text-slate-500 tracking-wider">My Class</span>
           </div>
+          {teacher.isClassTeacher && teacher.assignedClassId ? (
+            <>
+              <p className="text-3xl font-black text-slate-900 dark:text-white mb-1">Class {className || 'Loading...'}</p>
+              <p className="text-slate-500 font-medium text-sm">You are the class teacher</p>
+            </>
+          ) : (
+            <>
+              <p className="text-lg font-bold text-slate-400 mb-1">No Class Assigned</p>
+              <p className="text-slate-500 font-medium text-sm">Ask admin to assign one</p>
+            </>
+          )}
         </div>
-      )}
+
+        <div className="p-8 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-xl transition-all hover:-translate-y-1">
+          <div className="flex justify-between items-start mb-4">
+            <div className="w-12 h-12 bg-purple-50 dark:bg-purple-950/40 rounded-2xl flex items-center justify-center text-purple-600 dark:text-purple-400 text-2xl">📚</div>
+            <span className="px-3 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg text-[10px] font-black uppercase text-slate-500 tracking-wider">Subjects</span>
+          </div>
+          <p className="text-3xl font-black text-slate-900 dark:text-white mb-1">{teacher.primarySubject}</p>
+          <p className="text-slate-500 font-medium text-sm">{teacher.assignedSubjects.length} Classes Assigned</p>
+        </div>
+
+        <div className="p-8 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-xl transition-all hover:-translate-y-1">
+          <div className="flex justify-between items-start mb-4">
+            <div className="w-12 h-12 bg-emerald-50 dark:bg-emerald-950/40 rounded-2xl flex items-center justify-center text-emerald-600 dark:text-emerald-400 text-2xl">📝</div>
+            <span className="px-3 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg text-[10px] font-black uppercase text-slate-500 tracking-wider">Activity</span>
+          </div>
+          <p className="text-3xl font-black text-slate-900 dark:text-white mb-1">{assignments.length}</p>
+          <p className="text-slate-500 font-medium text-sm">Active Assignments</p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const MyClassView: React.FC<{ teacher: Teacher, adminId: string }> = ({ teacher, adminId }) => {
+  const [students, setStudents] = useState<Student[]>([]);
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isAdding, setIsAdding] = useState(false);
+
+  useEffect(() => {
+    if (teacher.assignedClassId) {
+      dbService.getStudentsByClass(adminId, teacher.assignedClassId).then(setStudents);
+    }
+  }, [teacher.assignedClassId, adminId]);
+
+  const handleAdd = async () => {
+    if (!name || !email || !password || !teacher.assignedClassId) {
+      alert("All fields including temporary password are required.");
+      return;
+    }
+
+    setIsAdding(true);
+    try {
+      // Fetch class details to get the correct gradeId
+      const cls = await dbService.getClass(teacher.schoolId, teacher.assignedClassId);
+      const correctGradeId = cls ? cls.gradeId : 'unknown';
+
+      // 1. Create the Auth account
+      const uid = await dbService.createUserAccount(email, password);
+
+      // 2. Create the Student Profile
+      const studentProfile: Omit<Student, 'id'> = {
+        name, email,
+        schoolId: teacher.schoolId,
+        classId: teacher.assignedClassId,
+        gradeId: correctGradeId
+      };
+
+      await dbService.createStudentProfile(adminId, uid, studentProfile, password);
+
+      setStudents([...students, { id: uid, ...studentProfile }]);
+      setName(''); setEmail(''); setPassword('');
+      alert(`Student account created for ${email}! They can now login with the password you set.`);
+    } catch (err: any) {
+      console.error(err);
+      alert("Failed to create student account: " + err.message);
+    } finally {
+      setIsAdding(false);
+    }
+  };
+
+  const handleDelete = async (student: Student) => {
+    if (!confirm(`Are you sure you want to remove ${student.name}? This cannot be undone.`)) return;
+
+    try {
+      await dbService.deleteStudent(adminId, student);
+      setStudents(students.filter(s => s.id !== student.id));
+    } catch (err: any) {
+      alert("Failed to delete student: " + err.message);
+    }
+  };
+
+  return (
+    <div className="bg-white dark:bg-slate-900 rounded-[2rem] p-8 border border-slate-200 dark:border-slate-800 shadow-sm">
+      <h3 className="text-xl font-bold mb-6">My Class Students</h3>
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-8">
+        <input placeholder="Student Name" value={name} onChange={e => setName(e.target.value)} className="input-style" />
+        <input placeholder="Student Email" value={email} onChange={e => setEmail(e.target.value)} className="input-style" />
+        <input type="password" placeholder="Temp Password" value={password} onChange={e => setPassword(e.target.value)} className="input-style" />
+        <button
+          onClick={handleAdd}
+          disabled={isAdding}
+          className={`bg-indigo-600 hover:bg-indigo-700 text-white px-8 rounded-2xl font-bold transition-all active:scale-95 shadow-lg shadow-indigo-100 dark:shadow-none ${isAdding ? 'opacity-50' : ''}`}
+        >
+          {isAdding ? 'Creating...' : 'Add Student'}
+        </button>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+        {students.map(s => (
+          <div key={s.id} className="p-5 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-transparent hover:border-indigo-500/30 transition-all group flex justify-between items-center">
+            <div>
+              <p className="font-bold group-hover:text-indigo-600 transition-colors">{s.name}</p>
+              <p className="text-xs text-slate-500 font-medium">{s.email}</p>
+            </div>
+            <button
+              onClick={() => handleDelete(s)}
+              className="text-slate-300 hover:text-red-500 transition-colors p-2"
+              title="Remove Student"
+            >
+              🗑️
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const SubjectStudentsView: React.FC<{ teacher: Teacher | null, adminId: string }> = ({ teacher, adminId }) => {
+  if (!teacher) return null;
+  return (
+    <div className="space-y-6 mt-6">
+      <h3 className="text-xl font-bold">Subject Classes</h3>
+      {teacher.assignedSubjects.map((sub, i) => (
+        <SubjectClassRow key={i} subject={sub} adminId={adminId} />
+      ))}
+    </div>
+  );
+};
+
+const SubjectClassRow: React.FC<{ subject: any, adminId: string }> = ({ subject, adminId }) => {
+  const [students, setStudents] = useState<Student[]>([]);
+  const [className, setClassName] = useState(subject.classId);
+  const [subjectName, setSubjectName] = useState(subject.subjectId);
+
+  useEffect(() => {
+    dbService.getStudentsByClass(adminId, subject.classId).then(setStudents);
+
+    // Fetch names
+    dbService.getClass(adminId, subject.classId).then(c => {
+      if (c) setClassName(c.name);
+    });
+
+    // Check if subject.subjectId looks like an ID (alphanumeric) or name
+    // If it's an ID, try to fetch it.
+    if (subject.subjectId) {
+      dbService.getSubject(adminId, subject.subjectId).then(s => {
+        if (s) setSubjectName(s.name);
+        else setSubjectName(subject.subjectId); // Fallback to ID if not found (or if it was a name)
+      });
+    }
+
+  }, [subject.classId, subject.subjectId, adminId]);
+
+  return (
+    <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-sm hover:border-indigo-500/30 transition-all">
+      <div className="flex justify-between items-center mb-4">
+        <h4 className="font-black text-indigo-600">Class {className} - {subjectName}</h4>
+        <span className="px-3 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg text-[10px] font-black uppercase text-slate-500 tracking-wider">
+          {students.length} Students
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {students.map(s => <span key={s.id} className="px-4 py-2 bg-slate-50 dark:bg-slate-800/50 rounded-xl text-xs font-bold border border-slate-100 dark:border-slate-700/50">{s.name}</span>)}
+      </div>
     </div>
   );
 };
