@@ -203,9 +203,21 @@ const DashboardLayout: React.FC<{ user: User, role: UserRole, children: React.Re
           </button>
           <button
             onClick={handleLogout}
-            className="w-10 h-10 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl flex items-center justify-center hover:bg-slate-50 transition-colors"
+            className="w-10 h-10 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl flex items-center justify-center hover:bg-slate-50 transition-colors text-red-500 dark:text-red-400"
           >
-            🚪
+            <svg
+              viewBox="0 0 24 24"
+              className="w-5 h-5 text-red-500 dark:text-red-400"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M9 4h-3a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h3" />
+              <path d="M16 12H9" />
+              <path d="M13 9l3 3-3 3" />
+            </svg>
           </button>
         </div>
       </nav>
