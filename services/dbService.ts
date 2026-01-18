@@ -5,7 +5,7 @@ import {
   updateDoc, arrayUnion, serverTimestamp, deleteDoc, arrayRemove, deleteField
 } from 'firebase/firestore';
 import { db, firebaseConfig } from './firebase';
-import { School, Teacher, Grade, Class, Subject, Student, AssignedSubject, UserRole } from '../types';
+import { School, Teacher, Grade, Class, Subject, Student, AssignedSubject, UserRole, Assignment, Submission } from '../types';
 
 // Secondary app for creating users without signing out the current one
 const secondaryApp = getApps().find(a => a.name === 'Secondary') || initializeApp(firebaseConfig, "Secondary");
@@ -268,5 +268,67 @@ export const dbService = {
     const q = query(collection(db, 'users'), where('email', '==', email.toLowerCase()), where('role', '==', 'TEACHER'));
     const snap = await getDocs(q);
     return !snap.empty ? snap.docs[0].data() : null;
+  },
+
+  // --- Image Upload ---
+  async uploadImage(file: File, path: string): Promise<string> {
+    // Dynamically import storage to avoid issues if not initialized strictly
+    const { storage } = await import('./firebase');
+    const { ref, uploadBytes, getDownloadURL } = await import('firebase/storage');
+
+    // Create a reference
+    const storageRef = ref(storage, path);
+
+    // Upload
+    await uploadBytes(storageRef, file);
+
+    // Get URL
+    return await getDownloadURL(storageRef);
+  },
+
+  // --- Assignments Persistence ---
+  async saveAssignment(adminId: string, assignment: Assignment) {
+    // Save to top-level assignments collection for easy querying, or nested? 
+    // Requirement: "teacher needs to see all assignments".
+    // Let's store in top-level 'assignments' coll but include adminId/schoolId metadata.
+    // Actually, sticking to hierarchical: users/{adminId}/assignments/{assignmentId}
+    const docRef = doc(getNestedColl(adminId, 'assignments'), assignment.id);
+    await setDoc(docRef, assignment, { merge: true });
+  },
+
+  async getTeacherAssignments(adminId: string, teacherId: string): Promise<Assignment[]> {
+    const q = query(getNestedColl(adminId, 'assignments'), where('teacherId', '==', teacherId));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => d.data() as Assignment).sort((a, b) => b.createdAt - a.createdAt);
+  },
+
+  async getStudentAssignments(adminId: string, classId: string): Promise<Assignment[]> {
+    // Only published assignments for the student's class
+    const q = query(
+      getNestedColl(adminId, 'assignments'),
+      where('classId', '==', classId),
+      where('status', '==', 'PUBLISHED')
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map(d => d.data() as Assignment).sort((a, b) => b.createdAt - a.createdAt);
+  },
+
+  // --- Submissions Persistence ---
+  async saveSubmission(adminId: string, submission: Submission) {
+    // Store in hierarchical structure: users/{adminId}/submissions/{submissionId}
+    const docRef = doc(getNestedColl(adminId, 'submissions'), submission.id);
+    await setDoc(docRef, submission, { merge: true });
+  },
+
+  async getSubmissionsByAssignment(adminId: string, assignmentId: string): Promise<Submission[]> {
+    const q = query(getNestedColl(adminId, 'submissions'), where('assignmentId', '==', assignmentId));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => d.data() as Submission).sort((a, b) => (b.gradedAt || 0) - (a.gradedAt || 0));
+  },
+
+  async getSubmissionsByStudent(adminId: string, studentId: string): Promise<Submission[]> {
+    const q = query(getNestedColl(adminId, 'submissions'), where('studentId', '==', studentId));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => d.data() as Submission).sort((a, b) => (b.gradedAt || 0) - (a.gradedAt || 0));
   }
 };

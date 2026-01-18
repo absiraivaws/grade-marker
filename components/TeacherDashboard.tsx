@@ -5,53 +5,96 @@ import { Assignment, Submission, MarkingCriterion, Teacher, Student, Subject } f
 import { dbService } from '../services/dbService';
 import { extractMarkingPoints } from '../services/geminiService';
 
-interface Props {
-  teacherId: string;
-  adminId: string;
-  assignments: Assignment[];
-  submissions: Submission[];
-  onCreateAssignment: (a: Assignment) => void;
-  onUpdateSubmission: (s: Submission) => void;
-}
-
-const TeacherDashboard: React.FC<Props> = ({ teacherId, adminId, assignments, submissions, onCreateAssignment, onUpdateSubmission }) => {
+const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ teacherId, adminId }) => {
   const [teacher, setTeacher] = useState<Teacher | null>(null);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [submissions, setSubmissions] = useState<Submission[]>([]); // TODO: Fetch from DB
   const [showAdd, setShowAdd] = useState(false);
   const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
 
   // Create Assignment State
   const [title, setTitle] = useState('');
   const [question, setQuestion] = useState('');
-  const [referenceImages, setReferenceImages] = useState<string[]>([]);
+  const [referenceImages, setReferenceImages] = useState<File[]>([]);
+  const [referenceImageUrls, setReferenceImageUrls] = useState<string[]>([]);
   const [criteria, setCriteria] = useState<MarkingCriterion[]>([]);
   const [isExtracting, setIsExtracting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [selectedSubjectId, setSelectedSubjectId] = useState('');
   const [selectedClassId, setSelectedClassId] = useState('');
 
-  // Load Teacher Profile
+  // Display Names Map
+  const [classNames, setClassNames] = useState<{ [key: string]: string }>({});
+  const [subjectNames, setSubjectNames] = useState<{ [key: string]: string }>({});
+
+  // Load Teacher Profile & Names
   useEffect(() => {
-    const fetchProfile = async () => {
+    const fetchProfileAndNames = async () => {
       const allTeachers = await dbService.getTeachers(adminId);
       const profile = allTeachers.find(t => t.id === teacherId);
-      if (profile) setTeacher(profile);
+      if (profile) {
+        setTeacher(profile);
+
+        // Fetch Names
+        const cNames: { [key: string]: string } = {};
+        const sNames: { [key: string]: string } = {};
+
+        // 1. My Class Name
+        if (profile.assignedClassId) {
+          const c = await dbService.getClass(adminId, profile.assignedClassId);
+          if (c) cNames[profile.assignedClassId] = c.name;
+        }
+
+        // 2. Assigned Subjects Classes & Subject Names
+        for (const assign of profile.assignedSubjects) {
+          if (!cNames[assign.classId]) {
+            const c = await dbService.getClass(adminId, assign.classId);
+            if (c) cNames[assign.classId] = c.name;
+          }
+          if (!sNames[assign.subjectId]) {
+            const s = await dbService.getSubject(adminId, assign.subjectId);
+            // If subject found, use name. Else assume legacy ID-as-name or just show ID
+            if (s) sNames[assign.subjectId] = s.name;
+            else sNames[assign.subjectId] = assign.subjectId;
+          }
+        }
+        setClassNames(cNames);
+        setSubjectNames(sNames);
+      }
+
+      // Fetch Assignments
+      const myAssignments = await dbService.getTeacherAssignments(adminId, teacherId);
+      setAssignments(myAssignments);
+
+      // Fetch all submissions for teacher's assignments
+      const allSubmissions: Submission[] = [];
+      for (const assignment of myAssignments) {
+        const assignmentSubs = await dbService.getSubmissionsByAssignment(adminId, assignment.id);
+        allSubmissions.push(...assignmentSubs);
+      }
+      setSubmissions(allSubmissions);
     };
-    fetchProfile();
+    fetchProfileAndNames();
   }, [teacherId, adminId]);
+
+  const uniqueAssignedSubjects = Array.from(new Set(teacher?.assignedSubjects.map(s => s.subjectId)))
+    .map(id => ({ id, name: subjectNames[id] || id }));
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setReferenceImages(prev => [...prev, file]);
       const reader = new FileReader();
-      reader.onloadend = () => setReferenceImages(prev => [...prev, reader.result as string]);
+      reader.onloadend = () => setReferenceImageUrls(prev => [...prev, reader.result as string]);
       reader.readAsDataURL(file);
     }
   };
 
   const handleExtractCriteria = async () => {
-    if (referenceImages.length === 0) return;
+    if (referenceImageUrls.length === 0) return;
     setIsExtracting(true);
     try {
-      const points = await extractMarkingPoints(referenceImages);
+      const points = await extractMarkingPoints(referenceImageUrls);
       setCriteria(points.map(p => ({ point: p, weight: 1 })));
     } catch (err) {
       alert("Failed to extract criteria");
@@ -60,27 +103,52 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, adminId, assignments, su
     }
   };
 
-  const handleSubmitAssignment = () => {
-    if (!title || !question || !selectedSubjectId || !selectedClassId) {
+  const handleSave = async (status: 'DRAFT' | 'PUBLISHED') => {
+    if (!title || !selectedSubjectId || !selectedClassId) {
       alert("Please fill all details and select a class/subject");
       return;
     }
+    setIsSaving(true);
+    try {
+      // Upload images and keep base64 data
+      const imageUrls: string[] = [];
+      for (const file of referenceImages) {
+        if (file instanceof File) {
+          const path = `assignments/${teacherId}/${Date.now()}_${file.name}`;
+          const url = await dbService.uploadImage(file, path);
+          imageUrls.push(url);
+        }
+      }
 
-    const newA: Assignment = {
-      id: Date.now().toString(),
-      title, question,
-      teacherAnswerImages: referenceImages,
-      markingPoints: criteria,
-      createdAt: Date.now(),
-      gradeId: 'extracted-from-class', // Simplified
-      classId: selectedClassId,
-      subjectId: selectedSubjectId,
-      teacherId
-    };
-    onCreateAssignment(newA);
-    setShowAdd(false);
-    setTitle(''); setQuestion(''); setCriteria([]); setReferenceImages([]);
+      const newA: Assignment = {
+        id: Date.now().toString(),
+        title, question,
+        teacherAnswerImages: imageUrls, // Storage URLs
+        teacherAnswerImagesBase64: referenceImageUrls, // Base64 for Gemini
+        markingPoints: criteria,
+        createdAt: Date.now(),
+        gradeId: 'extracted-from-class',
+        classId: selectedClassId,
+        subjectId: selectedSubjectId,
+        teacherId,
+        status
+      };
+
+      await dbService.saveAssignment(adminId, newA);
+      setAssignments(prev => [newA, ...prev]);
+      setShowAdd(false);
+      setTitle(''); setQuestion(''); setCriteria([]); setReferenceImages([]); setReferenceImageUrls([]);
+      alert(status === 'DRAFT' ? 'Draft saved!' : 'Assignment published!');
+    } catch (err: any) {
+      console.error(err);
+      alert("Failed to save: " + err.message);
+    } finally {
+      setIsSaving(false);
+    }
   };
+
+  const drafts = assignments.filter(a => a.status === 'DRAFT');
+  const published = assignments.filter(a => a.status === 'PUBLISHED');
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -99,22 +167,29 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, adminId, assignments, su
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {assignments.map(a => (
-                <div
-                  key={a.id}
-                  onClick={() => setSelectedAssignment(a)}
-                  className="group cursor-pointer bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-7 shadow-sm hover:shadow-xl hover:border-indigo-400 transition-all hover:-translate-y-1"
-                >
-                  <div className="w-12 h-12 bg-indigo-50 dark:bg-indigo-950/40 rounded-2xl flex items-center justify-center text-indigo-600 dark:text-indigo-400 text-xl mb-4 group-hover:scale-110 transition-transform">📄</div>
-                  <h3 className="text-xl font-bold mb-2 group-hover:text-indigo-600 transition-colors line-clamp-1">{a.title}</h3>
-                  <p className="text-slate-500 text-sm line-clamp-3 mb-6 leading-relaxed">{a.question}</p>
-                  <div className="pt-6 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs font-bold text-slate-400">
-                    <span>{new Date(a.createdAt).toLocaleDateString()}</span>
-                    <span className="px-3 py-1 bg-indigo-50 dark:bg-indigo-950/40 rounded-full text-[10px] text-indigo-600">View Details</span>
-                  </div>
+            {/* DRAFTS */}
+            {drafts.length > 0 && (
+              <div className="space-y-6">
+                <h3 className="text-xl font-bold text-slate-400 uppercase tracking-widest pl-2 border-l-4 border-slate-300 dark:border-slate-700">Drafts</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {drafts.map(a => (
+                    <AssignmentCard key={a.id} assignment={a} onClick={() => setSelectedAssignment(a)} isDraft />
+                  ))}
                 </div>
-              ))}
+              </div>
+            )}
+
+            {/* PUBLISHED */}
+            <div className="space-y-6">
+              <h3 className="text-xl font-bold text-slate-400 uppercase tracking-widest pl-2 border-l-4 border-indigo-500">Active Assignments</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {published.map(a => (
+                  <AssignmentCard key={a.id} assignment={a} onClick={() => setSelectedAssignment(a)} />
+                ))}
+                {published.length === 0 && (
+                  <div className="col-span-full py-10 text-center text-slate-400 italic">No active assignments. Create one or publish a draft.</div>
+                )}
+              </div>
             </div>
           </div>
         } />
@@ -190,12 +265,43 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, adminId, assignments, su
             </div>
 
             <div className="pt-8 mt-4 border-t border-slate-100 dark:border-slate-800">
-              <button
-                onClick={() => setSelectedAssignment(null)}
-                className="w-full py-4 bg-slate-900 dark:bg-indigo-600 text-white rounded-2xl font-black shadow-xl transition-all active:scale-95"
-              >
-                Return to Dashboard
-              </button>
+              {selectedAssignment.status === 'DRAFT' ? (
+                <div className="flex gap-4">
+                  <button
+                    onClick={() => setSelectedAssignment(null)}
+                    className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all active:scale-95"
+                  >
+                    Close
+                  </button>
+                  <button
+                    disabled={isSaving}
+                    onClick={async () => {
+                      setIsSaving(true);
+                      try {
+                        const updatedAssignment = { ...selectedAssignment, status: 'PUBLISHED' as const };
+                        await dbService.saveAssignment(adminId, updatedAssignment);
+                        setAssignments(prev => prev.map(a => a.id === selectedAssignment.id ? updatedAssignment : a));
+                        setSelectedAssignment(null);
+                        alert('Assignment published successfully!');
+                      } catch (err: any) {
+                        alert('Failed to publish: ' + err.message);
+                      } finally {
+                        setIsSaving(false);
+                      }
+                    }}
+                    className="flex-[2] py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
+                  >
+                    {isSaving ? 'Publishing...' : '📢 Publish Now'}
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setSelectedAssignment(null)}
+                  className="w-full py-4 bg-slate-900 dark:bg-indigo-600 text-white rounded-2xl font-black shadow-xl transition-all active:scale-95"
+                >
+                  Return to Dashboard
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -211,9 +317,9 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, adminId, assignments, su
                   <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Class</label>
                   <select className="input-style" value={selectedClassId} onChange={e => setSelectedClassId(e.target.value)}>
                     <option value="">Select Class</option>
-                    {teacher?.assignedClassId && <option value={teacher.assignedClassId}>My Class ({teacher.assignedClassId})</option>}
+                    {teacher?.assignedClassId && <option value={teacher.assignedClassId}>{classNames[teacher.assignedClassId] || teacher.assignedClassId} (Class Teacher)</option>}
                     {teacher?.assignedSubjects.map((s, i) => (
-                      <option key={i} value={s.classId}>Class {s.classId} ({s.subjectId})</option>
+                      <option key={i} value={s.classId}>{classNames[s.classId] || s.classId} ({subjectNames[s.subjectId] || s.subjectId})</option>
                     ))}
                   </select>
                 </div>
@@ -221,9 +327,11 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, adminId, assignments, su
                   <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Subject</label>
                   <select className="input-style" value={selectedSubjectId} onChange={e => setSelectedSubjectId(e.target.value)}>
                     <option value="">Select Subject</option>
-                    {teacher?.primarySubject && <option value={teacher.primarySubject}>{teacher.primarySubject}</option>}
-                    {teacher?.assignedSubjects.map((s, i) => (
-                      <option key={i} value={s.subjectId}>{s.subjectId}</option>
+                    {teacher?.primarySubject && !uniqueAssignedSubjects.some(s => s.name === teacher.primarySubject) && (
+                      <option value={teacher.primarySubject}>{teacher.primarySubject}</option>
+                    )}
+                    {uniqueAssignedSubjects.map((s, i) => (
+                      <option key={i} value={s.id}>{s.name}</option>
                     ))}
                   </select>
                 </div>
@@ -242,10 +350,13 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, adminId, assignments, su
               <div className="space-y-4">
                 <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Correct Solution (Reference Images)</label>
                 <div className="flex flex-wrap gap-3">
-                  {referenceImages.map((img, idx) => (
+                  {referenceImageUrls.map((img, idx) => (
                     <div key={idx} className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm animate-in zoom-in duration-200">
                       <img src={img} className="w-full h-full object-cover" />
-                      <button onClick={() => setReferenceImages(referenceImages.filter((_, i) => i !== idx))} className="absolute top-1 right-1 bg-white/90 dark:bg-slate-800/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm">✕</button>
+                      <button onClick={() => {
+                        setReferenceImages(referenceImages.filter((_, i) => i !== idx));
+                        setReferenceImageUrls(referenceImageUrls.filter((_, i) => i !== idx));
+                      }} className="absolute top-1 right-1 bg-white/90 dark:bg-slate-800/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm">✕</button>
                     </div>
                   ))}
                   <label className="w-24 h-24 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-all hover:border-indigo-400 active:scale-95">
@@ -253,7 +364,7 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, adminId, assignments, su
                     <span className="text-3xl text-slate-300 font-light">+</span>
                   </label>
                 </div>
-                {referenceImages.length > 0 && criteria.length === 0 && (
+                {referenceImageUrls.length > 0 && criteria.length === 0 && (
                   <button onClick={handleExtractCriteria} disabled={isExtracting} className={`w-full py-3 ${isExtracting ? 'bg-slate-100 dark:bg-slate-800 animate-pulse text-slate-400' : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'} rounded-2xl text-sm font-black uppercase tracking-widest transition-all`}>
                     {isExtracting ? 'AI Analyzing Reference...' : '✨ Auto-Extract Marking Points'}
                   </button>
@@ -263,7 +374,7 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, adminId, assignments, su
               {criteria.length > 0 && (
                 <div className="space-y-3">
                   <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Marking Criteria & Weights</label>
-                  <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
+                  <div className="space-y-2">
                     {criteria.map((c, i) => (
                       <div key={i} className="flex gap-2 items-center bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-100 dark:border-slate-800 animate-in slide-in-from-left duration-200" style={{ animationDelay: `${i * 50}ms` }}>
                         <span className="text-xs font-black text-indigo-600 bg-white dark:bg-slate-900 w-6 h-6 rounded-lg flex items-center justify-center shadow-sm">{i + 1}</span>
@@ -277,6 +388,13 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, adminId, assignments, su
                           newC[i].weight = parseInt(e.target.value) || 0;
                           setCriteria(newC);
                         }} />
+                        <button
+                          onClick={() => setCriteria(criteria.filter((_, idx) => idx !== i))}
+                          className="w-6 h-6 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 flex items-center justify-center transition-colors"
+                          title="Delete criterion"
+                        >
+                          ✕
+                        </button>
                       </div>
                     ))}
                     <button onClick={() => setCriteria([...criteria, { point: '', weight: 1 }])} className="w-full py-2 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-400 hover:border-indigo-400 hover:text-indigo-400 transition-all">+ Add Rule</button>
@@ -292,10 +410,18 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, adminId, assignments, su
                   Cancel
                 </button>
                 <button
-                  onClick={handleSubmitAssignment}
-                  className="flex-[2] py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 dark:shadow-none transition-all active:scale-95"
+                  disabled={isSaving}
+                  onClick={() => handleSave('DRAFT')}
+                  className="flex-1 py-4 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-2xl font-bold shadow-sm transition-all active:scale-95 disabled:opacity-50"
                 >
-                  Publish Template
+                  {isSaving ? 'Saving...' : 'Save Draft'}
+                </button>
+                <button
+                  disabled={isSaving}
+                  onClick={() => handleSave('PUBLISHED')}
+                  className="flex-[2] py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
+                >
+                  {isSaving ? 'Publishing...' : 'Publish Template'}
                 </button>
               </div>
             </div>
@@ -517,3 +643,22 @@ const SubjectClassRow: React.FC<{ subject: any, adminId: string }> = ({ subject,
 };
 
 export default TeacherDashboard;
+
+const AssignmentCard: React.FC<{ assignment: Assignment, onClick: () => void, isDraft?: boolean }> = ({ assignment, onClick, isDraft }) => (
+  <div
+    onClick={onClick}
+    className={`group cursor-pointer bg-white dark:bg-slate-900 border ${isDraft ? 'border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50' : 'border-slate-200 dark:border-slate-800'} rounded-3xl p-7 shadow-sm hover:shadow-xl hover:border-indigo-400 transition-all hover:-translate-y-1`}
+  >
+    <div className={`w-12 h-12 ${isDraft ? 'bg-slate-200 dark:bg-slate-700 text-slate-500' : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'} rounded-2xl flex items-center justify-center text-xl mb-4 group-hover:scale-110 transition-transform`}>
+      {isDraft ? '📝' : '📄'}
+    </div>
+    <h3 className="text-xl font-bold mb-2 group-hover:text-indigo-600 transition-colors line-clamp-1">{assignment.title}</h3>
+    <p className="text-slate-500 text-sm line-clamp-3 mb-6 leading-relaxed">{assignment.question}</p>
+    <div className="pt-6 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs font-bold text-slate-400">
+      <span>{new Date(assignment.createdAt).toLocaleDateString()}</span>
+      <span className={`px-3 py-1 rounded-full text-[10px] ${isDraft ? 'bg-slate-200 text-slate-600' : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600'}`}>
+        {isDraft ? 'DRAFT' : 'View Details'}
+      </span>
+    </div>
+  </div>
+);

@@ -14,7 +14,7 @@ export const analyzeAnswer = async (
   studentAnswerImages: string[]
 ): Promise<AIResponse> => {
   const ai = getAI();
-  
+
   const markingCriteriaString = assignment.markingPoints
     .map((m, i) => `${i + 1}. ${m.point} (Weight: ${m.weight})`)
     .join("\n");
@@ -35,12 +35,15 @@ export const analyzeAnswer = async (
     5. JSON FORMAT: Output must be valid JSON matching the schema.
   `;
 
-  const teacherParts = assignment.teacherAnswerImages?.map(img => ({
-    inlineData: {
-      mimeType: getMimeType(img),
-      data: img.split(',')[1]
-    }
-  })) || [{ text: "Use marking criteria as the only reference." }];
+  // Use base64 data if available, otherwise fallback to text
+  const teacherParts = assignment.teacherAnswerImagesBase64 && assignment.teacherAnswerImagesBase64.length > 0
+    ? assignment.teacherAnswerImagesBase64.map(img => ({
+      inlineData: {
+        mimeType: getMimeType(img),
+        data: img.split(',')[1]
+      }
+    }))
+    : [{ text: "Use marking criteria as the only reference." }];
 
   const studentParts = studentAnswerImages.map(img => ({
     inlineData: {
@@ -66,7 +69,7 @@ export const analyzeAnswer = async (
           score: { type: Type.NUMBER },
           totalPossible: { type: Type.NUMBER },
           feedback: { type: Type.STRING },
-          criteriasMet: { 
+          criteriasMet: {
             type: Type.ARRAY,
             items: { type: Type.BOOLEAN }
           }
@@ -88,11 +91,11 @@ export const analyzeAnswer = async (
 export const extractMarkingPoints = async (images: string[]): Promise<string[]> => {
   const ai = getAI();
   const prompt = "Look at these solution files (images/PDFs) provided in order and list the specific marking points (e.g., 'Correct formula', 'Substitution', 'Final answer'). Return as a JSON array of strings.";
-  
+
   const imageParts = images.map(img => ({
-    inlineData: { 
-      mimeType: getMimeType(img), 
-      data: img.split(',')[1] 
+    inlineData: {
+      mimeType: getMimeType(img),
+      data: img.split(',')[1]
     }
   }));
 

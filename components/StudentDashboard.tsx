@@ -1,46 +1,77 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { Assignment, Submission } from '../types';
 import { analyzeAnswer } from '../services/geminiService';
+import { dbService } from '../services/dbService';
 
 interface Props {
-  assignments: Assignment[];
-  submissions: Submission[];
-  onNewSubmission: (s: Submission) => void;
+  studentId: string;
+  adminId: string;
+  classId: string;
 }
 
-const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubmission }) => {
+const StudentDashboard: React.FC<Props> = ({ studentId, adminId, classId }) => {
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
   const [studentName, setStudentName] = useState('');
-  const [images, setImages] = useState<string[]>([]);
+  const [imageFiles, setImageFiles] = useState<File[]>([]);
+  const [imageUrls, setImageUrls] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastSubmissionResult, setLastSubmissionResult] = useState<Submission | null>(null);
+
+  // Fetch published assignments for this class
+  useEffect(() => {
+    const fetchData = async () => {
+      if (classId && adminId) {
+        const classAssignments = await dbService.getStudentAssignments(adminId, classId);
+        setAssignments(classAssignments);
+
+        // Fetch student's submissions
+        const studentSubmissions = await dbService.getSubmissionsByStudent(adminId, studentId);
+        setSubmissions(studentSubmissions);
+      }
+    };
+    fetchData();
+  }, [adminId, classId, studentId]);
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setImageFiles(prev => [...prev, file]);
       const reader = new FileReader();
-      reader.onloadend = () => setImages(prev => [...prev, reader.result as string]);
+      reader.onloadend = () => setImageUrls(prev => [...prev, reader.result as string]);
       reader.readAsDataURL(file);
     }
   };
 
   const handleSubmission = async () => {
-    if (!selectedAssignment || images.length === 0 || !studentName) {
+    if (!selectedAssignment || imageFiles.length === 0 || !studentName) {
       alert("Missing name or files");
       return;
     }
     setIsSubmitting(true);
     try {
-      const grading = await analyzeAnswer(selectedAssignment, images);
+      // Upload images to Storage
+      const uploadedImageUrls: string[] = [];
+      for (const file of imageFiles) {
+        const path = `submissions/${studentId}/${Date.now()}_${file.name}`;
+        const url = await dbService.uploadImage(file, path);
+        uploadedImageUrls.push(url);
+      }
+
+      // Grade using AI with base64 preview URLs
+      const grading = await analyzeAnswer(selectedAssignment, imageUrls);
       const scores = grading.criteriasMet.map((met, idx) => met ? (selectedAssignment.markingPoints[idx]?.weight || 0) : 0);
 
       const newSub: Submission = {
         id: Date.now().toString(),
         assignmentId: selectedAssignment.id,
-        studentId: 'mock-student-id', // Using mock ID until student auth is added
-        studentName, studentAnswerImages: images,
+        studentId: studentId,
+        studentName,
+        studentAnswerImages: uploadedImageUrls, // Storage URLs
+        studentAnswerImagesBase64: imageUrls, // Base64 for Gemini
         score: scores.reduce((a, b) => a + b, 0),
         maxScore: grading.totalPossible,
         feedback: grading.feedback,
@@ -48,12 +79,18 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
         criteriasMet: grading.criteriasMet,
         gradedAt: Date.now()
       };
-      onNewSubmission(newSub);
+
+      // Save to Firestore
+      await dbService.saveSubmission(adminId, newSub);
+
+      setSubmissions(prev => [newSub, ...prev]);
       setLastSubmissionResult(newSub);
       setSelectedAssignment(null);
-      setImages([]);
+      setImageFiles([]);
+      setImageUrls([]);
       setStudentName('');
     } catch (err) {
+      console.error(err);
       alert("Error during grading");
     } finally {
       setIsSubmitting(false);
@@ -159,6 +196,24 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
           <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-lg p-10 shadow-2xl overflow-y-auto max-h-[90vh] border border-white/10 animate-in zoom-in-95 duration-300">
             <h3 className="text-3xl font-black mb-8">Ready to Submit?</h3>
             <div className="space-y-6">
+              {/* Reference Images from Teacher */}
+              {selectedAssignment.teacherAnswerImages && selectedAssignment.teacherAnswerImages.length > 0 && (
+                <div className="space-y-3">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Question Images</label>
+                  <div className="flex flex-wrap gap-3">
+                    {selectedAssignment.teacherAnswerImages.map((img, idx) => (
+                      <div key={idx} className="relative w-24 h-24 rounded-2xl overflow-hidden border border-indigo-200 dark:border-indigo-800 shadow-sm cursor-pointer hover:scale-105 transition-transform" onClick={() => window.open(img, '_blank')}>
+                        <img src={img} className="w-full h-full object-cover" alt={`Question ${idx + 1}`} />
+                        <div className="absolute inset-0 bg-indigo-600/0 hover:bg-indigo-600/10 transition-colors flex items-center justify-center">
+                          <span className="text-white opacity-0 hover:opacity-100 text-xs">🔍</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-slate-500 italic">Click on images to view full size</p>
+                </div>
+              )}
+
               <div className="space-y-2">
                 <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Your Full Name</label>
                 <input className="input-style" value={studentName} onChange={e => setStudentName(e.target.value)} placeholder="Ex: Alex Johnson" />
@@ -167,10 +222,13 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
               <div className="space-y-4">
                 <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Attach Your Solutions</label>
                 <div className="flex flex-wrap gap-3">
-                  {images.map((img, idx) => (
+                  {imageUrls.map((img, idx) => (
                     <div key={idx} className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm animate-in zoom-in duration-200">
                       {img.startsWith('data:application/pdf') ? <div className="w-full h-full bg-red-50 dark:bg-red-950/20 flex items-center justify-center font-bold text-red-500 text-[10px]">PDF</div> : <img src={img} className="w-full h-full object-cover" />}
-                      <button onClick={() => setImages(images.filter((_, i) => i !== idx))} className="absolute top-1 right-1 bg-white/90 dark:bg-slate-800/90 rounded-full w-5 h-5 text-[10px] flex items-center justify-center shadow-sm">✕</button>
+                      <button onClick={() => {
+                        setImageFiles(imageFiles.filter((_, i) => i !== idx));
+                        setImageUrls(imageUrls.filter((_, i) => i !== idx));
+                      }} className="absolute top-1 right-1 bg-white/90 dark:bg-slate-800/90 rounded-full w-5 h-5 text-[10px] flex items-center justify-center shadow-sm">✕</button>
                     </div>
                   ))}
                   <label className="w-24 h-24 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 transition-all hover:border-indigo-400 active:scale-95">
@@ -181,8 +239,8 @@ const StudentDashboard: React.FC<Props> = ({ assignments, submissions, onNewSubm
               </div>
 
               <div className="flex gap-4 pt-8">
-                <button onClick={() => { setSelectedAssignment(null); setImages([]); }} className="flex-1 py-4 font-bold text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-2xl transition-colors">Cancel</button>
-                <button disabled={isSubmitting || !studentName || images.length === 0} onClick={handleSubmission} className="flex-1 py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 dark:shadow-none disabled:opacity-50 transition-all active:scale-95">
+                <button onClick={() => { setSelectedAssignment(null); setImageFiles([]); setImageUrls([]); }} className="flex-1 py-4 font-bold text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-2xl transition-colors">Cancel</button>
+                <button disabled={isSubmitting || !studentName || imageFiles.length === 0} onClick={handleSubmission} className="flex-1 py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 dark:shadow-none disabled:opacity-50 transition-all active:scale-95">
                   {isSubmitting ? 'AI Grading...' : 'Submit Now'}
                 </button>
               </div>

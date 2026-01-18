@@ -71,9 +71,11 @@ export interface Assignment {
   classId: string;
   subjectId: string;
   teacherId: string;
-  teacherAnswerImages?: string[];
+  teacherAnswerImages?: string[]; // Storage URLs
+  teacherAnswerImagesBase64?: string[]; // Base64 for Gemini
   markingPoints: MarkingCriterion[];
   createdAt: number;
+  status: 'DRAFT' | 'PUBLISHED';
 }
 
 export interface Submission {
@@ -81,11 +83,19 @@ export interface Submission {
   assignmentId: string;
   studentId: string;
   studentName: string;
-  studentAnswerImages: string[];
+  studentAnswerImages: string[]; // Storage URLs
+  studentAnswerImagesBase64?: string[]; // Base64 for Gemini
   feedback: string;
   score: number;
   maxScore: number;
   criteriaScores?: number[];
   criteriasMet?: boolean[];
   gradedAt?: number;
+}
+
+export interface AIResponse {
+  score: number;
+  totalPossible: number;
+  feedback: string;
+  criteriasMet: boolean[];
 }

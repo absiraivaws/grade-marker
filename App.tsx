@@ -17,9 +17,6 @@ const App: React.FC = () => {
   const [userProfile, setUserProfile] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const [assignments, setAssignments] = useState<Assignment[]>([]);
-  const [submissions, setSubmissions] = useState<Submission[]>([]);
-
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
       if (u) {
@@ -75,10 +72,6 @@ const App: React.FC = () => {
               <TeacherDashboard
                 teacherId={user?.uid!}
                 adminId={userProfile?.adminId}
-                assignments={assignments}
-                submissions={submissions}
-                onCreateAssignment={(a) => setAssignments([a, ...assignments])}
-                onUpdateSubmission={(s) => setSubmissions(submissions.map(x => x.id === s.id ? s : x))}
               />
             </DashboardLayout>
           </ProtectedRoute>
@@ -88,9 +81,9 @@ const App: React.FC = () => {
           <ProtectedRoute user={user} role={role} allowedRole={UserRole.STUDENT}>
             <DashboardLayout user={user!} role={role!}>
               <StudentDashboard
-                assignments={assignments}
-                submissions={submissions}
-                onNewSubmission={(s) => setSubmissions([s, ...submissions])}
+                studentId={user?.uid!}
+                adminId={userProfile?.adminId}
+                classId={userProfile?.classId}
               />
             </DashboardLayout>
           </ProtectedRoute>
