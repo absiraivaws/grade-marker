@@ -225,10 +225,10 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
             <div className="flex justify-between items-end">
               <div>
                 <h2 className="text-3xl font-black text-slate-800 dark:text-white tracking-tight">Assignments</h2>
-                <p className="text-slate-500 font-medium">Create and manage your grading templates</p>
+                <p className="text-slate-500 font-medium">Create and manage your grading assignments</p>
               </div>
               <button onClick={() => setShowAdd(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-2xl font-bold transition-all hover:-translate-y-1 active:scale-95 shadow-lg shadow-indigo-200 dark:shadow-none">
-                + Create Template
+                + Create Assignment
               </button>
             </div>
 
@@ -310,7 +310,7 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
             ) : (
               <h3 className="text-2xl font-black mb-1">{selectedAssignment.title}</h3>
             )}
-            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-6">Template Created on {new Date(selectedAssignment.createdAt).toLocaleDateString()}</p>
+            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-6">assignment Created on {new Date(selectedAssignment.createdAt).toLocaleDateString()}</p>
 
             <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2">
               <div className="bg-slate-50 dark:bg-slate-700/60 p-6 rounded-3xl border border-slate-100 dark:border-slate-700">
@@ -531,7 +531,7 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
       {showAdd && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4 animate-in fade-in duration-300">
           <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] w-full max-w-2xl p-10 shadow-2xl overflow-y-auto max-h-[90vh] animate-in zoom-in-95 duration-300">
-            <h3 className="text-3xl font-black mb-8">Create Assignment Template</h3>
+            <h3 className="text-3xl font-black mb-8">Create Assignment assignment</h3>
             <div className="space-y-6">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
@@ -642,7 +642,7 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
                   onClick={() => handleSave('PUBLISHED')}
                   className="flex-[2] py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
                 >
-                  {isSaving ? 'Publishing...' : 'Publish Template'}
+                  {isSaving ? 'Publishing...' : 'Publish assignment'}
                 </button>
               </div>
             </div>
