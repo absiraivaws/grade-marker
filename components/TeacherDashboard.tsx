@@ -655,6 +655,8 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
 
 const TeacherOverview: React.FC<{ teacher: Teacher | null, assignments: Assignment[], submissions: Submission[] }> = ({ teacher, assignments, submissions }) => {
   const [className, setClassName] = useState<string>('');
+  const activeCount = assignments.filter(a => a.status === 'PUBLISHED').length;
+  const draftCount = assignments.filter(a => a.status === 'DRAFT').length;
 
   useEffect(() => {
     const fetchClassName = async () => {
@@ -708,8 +710,14 @@ const TeacherOverview: React.FC<{ teacher: Teacher | null, assignments: Assignme
             <div className="w-12 h-12 bg-emerald-50 dark:bg-emerald-950/40 rounded-2xl flex items-center justify-center text-emerald-600 dark:text-emerald-400 text-2xl">📝</div>
             <span className="px-3 py-1 bg-slate-100 dark:bg-slate-700 rounded-lg text-[10px] font-black uppercase text-slate-500 tracking-wider">Activity</span>
           </div>
-          <p className="text-3xl font-black text-slate-900 dark:text-white mb-1">{assignments.length}</p>
-          <p className="text-slate-500 font-medium text-sm">Active Assignments</p>
+          <div className="flex items-end gap-3 mb-2">
+            <p className="text-3xl font-black text-slate-900 dark:text-white">{activeCount}</p>
+            <p className="text-xs font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-400">Active</p>
+          </div>
+          <div className="flex items-center gap-2 text-sm font-bold text-slate-500">
+            <span className="px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded-lg text-[10px] font-black uppercase tracking-wider text-slate-500">Drafts</span>
+            <span className="text-slate-700 dark:text-slate-200">{draftCount}</span>
+          </div>
         </div>
       </div>
     </div>
