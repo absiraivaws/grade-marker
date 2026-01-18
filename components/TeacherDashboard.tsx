@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { Assignment, Submission, MarkingCriterion, Teacher, Student, Subject } from '../types';
+import { Assignment, Submission, MarkingCriterion, Teacher, Student, Subject, Class } from '../types';
 import { dbService } from '../services/dbService';
 import { extractMarkingPoints } from '../services/geminiService';
 
@@ -26,6 +26,7 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
   // Display Names Map
   const [classNames, setClassNames] = useState<{ [key: string]: string }>({});
   const [subjectNames, setSubjectNames] = useState<{ [key: string]: string }>({});
+  const [classData, setClassData] = useState<{ [key: string]: Class }>({});
 
   // Load Teacher Profile & Names
   useEffect(() => {
@@ -38,18 +39,25 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
         // Fetch Names
         const cNames: { [key: string]: string } = {};
         const sNames: { [key: string]: string } = {};
+        const cData: { [key: string]: Class } = {};
 
         // 1. My Class Name
         if (profile.assignedClassId) {
           const c = await dbService.getClass(adminId, profile.assignedClassId);
-          if (c) cNames[profile.assignedClassId] = c.name;
+          if (c) {
+            cNames[profile.assignedClassId] = c.name;
+            cData[profile.assignedClassId] = c;
+          }
         }
 
         // 2. Assigned Subjects Classes & Subject Names
         for (const assign of profile.assignedSubjects) {
           if (!cNames[assign.classId]) {
             const c = await dbService.getClass(adminId, assign.classId);
-            if (c) cNames[assign.classId] = c.name;
+            if (c) {
+              cNames[assign.classId] = c.name;
+              cData[assign.classId] = c;
+            }
           }
           if (!sNames[assign.subjectId]) {
             const s = await dbService.getSubject(adminId, assign.subjectId);
@@ -60,6 +68,7 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
         }
         setClassNames(cNames);
         setSubjectNames(sNames);
+        setClassData(cData);
       }
 
       // Fetch Assignments
@@ -195,11 +204,12 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
         } />
 
         <Route path="/grades" element={
-          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-12 text-center border border-slate-200 dark:border-slate-800 animate-in zoom-in-95 duration-300">
-            <div className="text-6xl mb-6">🏆</div>
-            <h2 className="text-3xl font-black mb-4">Gradebook</h2>
-            <p className="text-slate-500 max-w-md mx-auto">This section will visualize class performance and student grades once assignments are graded.</p>
-          </div>
+          <TeacherGradebook
+            assignments={assignments}
+            submissions={submissions}
+            classNames={classNames}
+            subjectNames={subjectNames}
+          />
         } />
 
         <Route path="/students" element={
@@ -229,38 +239,34 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
               </div>
 
               <div className="space-y-4">
-                <div className="flex justify-between items-end">
-                  <h4 className="text-xl font-black">Student Submissions</h4>
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{submissions.filter(s => s.assignmentId === selectedAssignment.id).length} Total</span>
-                </div>
+                <h4 className="text-xl font-black">Student Submissions</h4>
 
-                <div className="space-y-3">
-                  {submissions.filter(s => s.assignmentId === selectedAssignment.id).map(sub => (
-                    <div key={sub.id} className="p-6 bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm">
-                      <div className="flex justify-between items-center mb-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-indigo-100 dark:bg-indigo-950/40 rounded-xl flex items-center justify-center text-lg">👤</div>
-                          <div>
-                            <p className="font-bold">{sub.studentName}</p>
-                            <p className="text-[10px] text-slate-400 font-black uppercase">Result: {sub.score}/{sub.maxScore}</p>
-                          </div>
-                        </div>
-                        <div className={`px-4 py-2 rounded-xl text-lg font-black ${sub.score / sub.maxScore > 0.7 ? 'text-emerald-500 bg-emerald-50 dark:bg-emerald-950/40' : 'text-amber-500 bg-amber-50 dark:bg-amber-950/40'}`}>
-                          {Math.round((sub.score / sub.maxScore) * 100)}%
-                        </div>
+                {(() => {
+                  const assignmentSubmissions = submissions.filter(s => s.assignmentId === selectedAssignment.id);
+                  const submittedCount = assignmentSubmissions.length;
+                  const uniqueStudentIds = new Set(assignmentSubmissions.map(s => s.studentId));
+                  const uniqueSubmittedCount = uniqueStudentIds.size;
+
+                  // Get total students in the class
+                  const assignmentClass = classData[selectedAssignment.classId];
+                  const totalStudents = assignmentClass?.studentIds?.length || 0;
+                  const pendingCount = totalStudents - uniqueSubmittedCount;
+
+                  return (
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-emerald-50 dark:bg-emerald-950/20 border-2 border-emerald-200 dark:border-emerald-900 rounded-2xl p-6 text-center">
+                        <div className="text-4xl font-black text-emerald-600 dark:text-emerald-400 mb-2">{submittedCount}</div>
+                        <p className="text-xs font-bold text-emerald-600/70 dark:text-emerald-400/70 uppercase tracking-widest">Submitted</p>
                       </div>
-
-                      <div className="bg-slate-50 dark:bg-slate-900/50 p-4 rounded-2xl text-xs font-medium text-slate-500 dark:text-slate-400 border border-slate-100 dark:border-slate-800 italic">
-                        "{sub.feedback}"
+                      <div className="bg-amber-50 dark:bg-amber-950/20 border-2 border-amber-200 dark:border-amber-900 rounded-2xl p-6 text-center">
+                        <div className="text-4xl font-black text-amber-600 dark:text-amber-400 mb-2">
+                          {pendingCount >= 0 ? pendingCount : '—'}
+                        </div>
+                        <p className="text-xs font-bold text-amber-600/70 dark:text-amber-400/70 uppercase tracking-widest">Pending</p>
                       </div>
                     </div>
-                  ))}
-                  {submissions.filter(s => s.assignmentId === selectedAssignment.id).length === 0 && (
-                    <div className="py-10 text-center border-2 border-dashed border-slate-100 dark:border-slate-800 rounded-3xl text-slate-400 font-bold italic">
-                      No submissions yet.
-                    </div>
-                  )}
-                </div>
+                  );
+                })()}
               </div>
             </div>
 
@@ -637,6 +643,167 @@ const SubjectClassRow: React.FC<{ subject: any, adminId: string }> = ({ subject,
       </div>
       <div className="flex flex-wrap gap-2">
         {students.map(s => <span key={s.id} className="px-4 py-2 bg-slate-50 dark:bg-slate-800/50 rounded-xl text-xs font-bold border border-slate-100 dark:border-slate-700/50">{s.name}</span>)}
+      </div>
+    </div>
+  );
+};
+
+const TeacherGradebook: React.FC<{
+  assignments: Assignment[];
+  submissions: Submission[];
+  classNames: { [key: string]: string };
+  subjectNames: { [key: string]: string };
+}> = ({ assignments, submissions, classNames, subjectNames }) => {
+  const [expandedAssignments, setExpandedAssignments] = useState<{ [id: string]: boolean }>({});
+  const [selectedSubmissionId, setSelectedSubmissionId] = useState<string | null>(null);
+
+  const toggleAssignment = (assignmentId: string) => {
+    setExpandedAssignments(prev => ({ ...prev, [assignmentId]: !prev[assignmentId] }));
+    const selected = submissions.find(s => s.id === selectedSubmissionId);
+    if (selected?.assignmentId === assignmentId && expandedAssignments[assignmentId]) {
+      setSelectedSubmissionId(null);
+    }
+  };
+
+  const sortedAssignments = [...assignments].sort((a, b) => b.createdAt - a.createdAt);
+
+  return (
+    <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-300">
+      <div>
+        <h2 className="text-3xl font-black text-slate-800 dark:text-white tracking-tight">Gradebook</h2>
+        <p className="text-slate-500 font-medium">View submissions assignment-wise and review individual student results.</p>
+      </div>
+
+      {sortedAssignments.length === 0 && (
+        <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-12 text-center border border-slate-200 dark:border-slate-800">
+          <div className="text-5xl mb-4">📘</div>
+          <p className="text-slate-500">No assignments found yet.</p>
+        </div>
+      )}
+
+      <div className="space-y-4">
+        {sortedAssignments.map(assignment => {
+          const assignmentSubmissions = submissions.filter(s => s.assignmentId === assignment.id);
+          const isExpanded = !!expandedAssignments[assignment.id];
+          const selectedSubmission = assignmentSubmissions.find(s => s.id === selectedSubmissionId) || null;
+
+          return (
+            <div key={assignment.id} className="bg-white dark:bg-slate-900 rounded-[2rem] border border-slate-200 dark:border-slate-800 shadow-sm">
+              <button
+                onClick={() => toggleAssignment(assignment.id)}
+                className="w-full text-left p-6 flex items-center justify-between gap-4 hover:bg-slate-50 dark:hover:bg-slate-800/60 rounded-[2rem] transition-colors"
+              >
+                <div className="space-y-1">
+                  <h3 className="text-xl font-black text-slate-800 dark:text-white">{assignment.title}</h3>
+                  <div className="text-xs font-bold text-slate-500 flex flex-wrap gap-2">
+                    <span className="px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg">
+                      Class {classNames[assignment.classId] || assignment.classId}
+                    </span>
+                    <span className="px-2 py-1 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 rounded-lg">
+                      {subjectNames[assignment.subjectId] || assignment.subjectId}
+                    </span>
+                    <span className="px-2 py-1 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 rounded-lg">
+                      {assignmentSubmissions.length} Submissions
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 text-xs font-black uppercase tracking-widest text-slate-400">
+                  <span>{isExpanded ? 'Collapse' : 'Expand'}</span>
+                  <span className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`}>⌄</span>
+                </div>
+              </button>
+
+              {isExpanded && (
+                <div className="border-t border-slate-100 dark:border-slate-800 p-6 space-y-6">
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="lg:col-span-1 space-y-3">
+                      <h4 className="text-sm font-black uppercase tracking-widest text-slate-400">Submitted Students</h4>
+                      {assignmentSubmissions.length === 0 && (
+                        <div className="text-sm text-slate-400 italic">No submissions yet.</div>
+                      )}
+                      <div className="space-y-2">
+                        {assignmentSubmissions.map(sub => (
+                          <button
+                            key={sub.id}
+                            onClick={() => setSelectedSubmissionId(sub.id)}
+                            className={`w-full text-left px-4 py-3 rounded-2xl border transition-all ${selectedSubmissionId === sub.id
+                              ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300'
+                              : 'border-slate-200 dark:border-slate-800 hover:border-indigo-300 dark:hover:border-indigo-700 bg-white/50 dark:bg-slate-900'
+                            }`}
+                          >
+                            <div className="font-bold">{sub.studentName || sub.studentId}</div>
+                            <div className="text-[10px] uppercase tracking-widest text-slate-400">
+                              {sub.score ?? 0}/{sub.maxScore ?? 0}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="lg:col-span-2">
+                      {!selectedSubmission && (
+                        <div className="h-full flex items-center justify-center text-slate-400 italic border border-dashed border-slate-200 dark:border-slate-800 rounded-3xl p-10">
+                          Select a student to view submission details.
+                        </div>
+                      )}
+
+                      {selectedSubmission && (
+                        <div className="space-y-6">
+                          <div className="bg-slate-50 dark:bg-slate-800/60 rounded-3xl p-6 border border-slate-100 dark:border-slate-800">
+                            <div className="flex flex-wrap items-center justify-between gap-4">
+                              <div>
+                                <h4 className="text-2xl font-black text-slate-800 dark:text-white">{selectedSubmission.studentName || selectedSubmission.studentId}</h4>
+                                <p className="text-xs font-bold uppercase tracking-widest text-slate-400">
+                                  {selectedSubmission.gradedAt ? `Graded ${new Date(selectedSubmission.gradedAt).toLocaleDateString()}` : 'Not graded yet'}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-3xl font-black text-indigo-600 dark:text-indigo-400">
+                                  {selectedSubmission.score ?? 0}/{selectedSubmission.maxScore ?? 0}
+                                </div>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Total Score</p>
+                              </div>
+                            </div>
+                            {selectedSubmission.feedback && (
+                              <p className="mt-4 text-sm text-slate-600 dark:text-slate-300">{selectedSubmission.feedback}</p>
+                            )}
+                          </div>
+
+                          <div className="space-y-3">
+                            <h5 className="text-sm font-black uppercase tracking-widest text-slate-400">Criteria Breakdown</h5>
+                            <div className="space-y-2">
+                              {assignment.markingPoints.map((criterion, idx) => {
+                                const met = selectedSubmission.criteriasMet?.[idx];
+                                const score = selectedSubmission.criteriaScores?.[idx];
+                                const color = met === true
+                                  ? 'border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300'
+                                  : met === false
+                                    ? 'border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300'
+                                    : 'border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-900 text-slate-600 dark:text-slate-300';
+
+                                return (
+                                  <div key={idx} className={`p-4 rounded-2xl border ${color} flex items-center justify-between gap-4`}>
+                                    <div className="flex items-start gap-3">
+                                      <div className="w-7 h-7 rounded-lg bg-white/70 dark:bg-slate-900/80 text-xs font-black flex items-center justify-center">{idx + 1}</div>
+                                      <div className="text-sm font-semibold leading-snug">{criterion.point}</div>
+                                    </div>
+                                    <div className="text-sm font-black">
+                                      {score !== undefined ? score : '—'} / {criterion.weight}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
