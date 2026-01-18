@@ -127,9 +127,29 @@ const ProtectedRoute: React.FC<{
 
 const DashboardLayout: React.FC<{ user: User, role: UserRole, children: React.ReactNode }> = ({ user, role, children }) => {
   const navigate = useNavigate();
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    if (typeof window === 'undefined') return 'light';
+    const stored = localStorage.getItem('theme');
+    if (stored === 'light' || stored === 'dark') return stored;
+    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    return prefersDark ? 'dark' : 'light';
+  });
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    if (theme === 'dark') root.classList.add('dark');
+    else root.classList.remove('dark');
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
   const handleLogout = async () => {
     await signOut(auth);
     navigate('/auth');
+  };
+
+  const handleThemeToggle = () => {
+    setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
   };
 
   return (
@@ -173,6 +193,14 @@ const DashboardLayout: React.FC<{ user: User, role: UserRole, children: React.Re
               {role.toLowerCase()} Mode
             </span>
           </div>
+          <button
+            onClick={handleThemeToggle}
+            className="w-10 h-10 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl flex items-center justify-center hover:bg-slate-50 transition-colors"
+            aria-label="Toggle theme"
+            title="Toggle theme"
+          >
+            {theme === 'dark' ? '🌙' : '☀️'}
+          </button>
           <button
             onClick={handleLogout}
             className="w-10 h-10 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl flex items-center justify-center hover:bg-slate-50 transition-colors"
