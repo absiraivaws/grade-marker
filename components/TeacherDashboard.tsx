@@ -11,6 +11,9 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
   const [submissions, setSubmissions] = useState<Submission[]>([]); // TODO: Fetch from DB
   const [showAdd, setShowAdd] = useState(false);
   const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
+  const [draftEdit, setDraftEdit] = useState<Assignment | null>(null);
+  const [draftImageFiles, setDraftImageFiles] = useState<File[]>([]);
+  const [draftImagePreviews, setDraftImagePreviews] = useState<string[]>([]);
 
   // Create Assignment State
   const [title, setTitle] = useState('');
@@ -85,6 +88,59 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
     };
     fetchProfileAndNames();
   }, [teacherId, adminId]);
+
+  useEffect(() => {
+    if (selectedAssignment?.status === 'DRAFT') {
+      setDraftEdit({
+        ...selectedAssignment,
+        markingPoints: [...selectedAssignment.markingPoints],
+        teacherAnswerImages: [...(selectedAssignment.teacherAnswerImages || [])],
+        teacherAnswerImagesBase64: [...(selectedAssignment.teacherAnswerImagesBase64 || [])]
+      });
+      setDraftImageFiles([]);
+      setDraftImagePreviews([]);
+    } else {
+      setDraftEdit(null);
+    }
+  }, [selectedAssignment]);
+
+  const handleDraftImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setDraftImageFiles(prev => [...prev, file]);
+      const reader = new FileReader();
+      reader.onloadend = () => setDraftImagePreviews(prev => [...prev, reader.result as string]);
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const persistDraft = async (nextStatus?: 'DRAFT' | 'PUBLISHED') => {
+    if (!draftEdit) return null;
+    const uploadedUrls: string[] = [];
+    for (const file of draftImageFiles) {
+      const path = `assignments/${teacherId}/${Date.now()}_${file.name}`;
+      const url = await dbService.uploadImage(file, path);
+      uploadedUrls.push(url);
+    }
+
+    const updatedImages = [...(draftEdit.teacherAnswerImages || []), ...uploadedUrls];
+    const updatedBase64 = [...(draftEdit.teacherAnswerImagesBase64 || []), ...draftImagePreviews];
+
+    const updatedAssignment: Assignment = {
+      ...draftEdit,
+      teacherAnswerImages: updatedImages,
+      teacherAnswerImagesBase64: updatedBase64,
+      status: nextStatus || draftEdit.status
+    };
+
+    await dbService.saveAssignment(adminId, updatedAssignment);
+    setAssignments(prev => prev.map(a => a.id === updatedAssignment.id ? updatedAssignment : a));
+    setSelectedAssignment(updatedAssignment);
+    setDraftEdit(updatedAssignment);
+    setDraftImageFiles([]);
+    setDraftImagePreviews([]);
+    return updatedAssignment;
+  };
 
   const uniqueAssignedSubjects = Array.from(new Set(teacher?.assignedSubjects.map(s => s.subjectId)))
     .map(id => ({ id, name: subjectNames[id] || id }));
@@ -229,14 +285,144 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
       {selectedAssignment && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4 animate-in fade-in duration-300">
           <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] w-full max-w-2xl p-10 shadow-2xl animate-in zoom-in-95 duration-300">
-            <h3 className="text-2xl font-black mb-1">{selectedAssignment.title}</h3>
+            {selectedAssignment.status === 'DRAFT' && draftEdit ? (
+              <div className="space-y-2 mb-3">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Assignment Title</label>
+                <input
+                  className="input-style"
+                  value={draftEdit.title}
+                  onChange={e => setDraftEdit({ ...draftEdit, title: e.target.value })}
+                />
+              </div>
+            ) : (
+              <h3 className="text-2xl font-black mb-1">{selectedAssignment.title}</h3>
+            )}
             <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-6">Template Created on {new Date(selectedAssignment.createdAt).toLocaleDateString()}</p>
 
             <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2">
               <div className="bg-slate-50 dark:bg-slate-700/60 p-6 rounded-3xl border border-slate-100 dark:border-slate-700">
                 <p className="text-[10px] font-black uppercase text-indigo-500 tracking-widest mb-2">Reference Question</p>
-                <p className="text-slate-600 dark:text-slate-300 font-medium leading-relaxed">{selectedAssignment.question}</p>
+                {selectedAssignment.status === 'DRAFT' && draftEdit ? (
+                  <textarea
+                    className="input-style h-32"
+                    value={draftEdit.question}
+                    onChange={e => setDraftEdit({ ...draftEdit, question: e.target.value })}
+                  />
+                ) : (
+                  <p className="text-slate-600 dark:text-slate-300 font-medium leading-relaxed">{selectedAssignment.question}</p>
+                )}
               </div>
+
+              {(selectedAssignment.status === 'DRAFT' || (selectedAssignment.teacherAnswerImages && selectedAssignment.teacherAnswerImages.length > 0) || (draftEdit && (draftEdit.teacherAnswerImages?.length || 0) > 0) || (draftImagePreviews.length > 0)) && (
+                <div className="space-y-3">
+                  <h4 className="text-xl font-black">Question Images</h4>
+                  <div className="flex flex-wrap gap-3">
+                    {(selectedAssignment.status === 'DRAFT' ? (draftEdit?.teacherAnswerImages || []) : (selectedAssignment.teacherAnswerImages || [])).map((img, idx) => (
+                      <div
+                        key={`existing-${idx}`}
+                        className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm cursor-pointer"
+                        onClick={() => window.open(img, '_blank')}
+                        title="Open image"
+                      >
+                        <img src={img} className="w-full h-full object-cover" />
+                        {selectedAssignment.status === 'DRAFT' && draftEdit && (
+                          <button
+                            onClick={() => {
+                              const updatedImages = draftEdit.teacherAnswerImages?.filter((_, i) => i !== idx) || [];
+                              const updatedBase64 = draftEdit.teacherAnswerImagesBase64?.filter((_, i) => i !== idx) || [];
+                              setDraftEdit({
+                                ...draftEdit,
+                                teacherAnswerImages: updatedImages,
+                                teacherAnswerImagesBase64: updatedBase64
+                              });
+                            }}
+                            className="absolute top-1 right-1 bg-white/90 dark:bg-slate-700/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm"
+                            title="Remove image"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    ))}
+
+                    {draftImagePreviews.map((img, idx) => (
+                      <div
+                        key={`new-${idx}`}
+                        className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm cursor-pointer"
+                        onClick={() => window.open(img, '_blank')}
+                        title="Open image"
+                      >
+                        <img src={img} className="w-full h-full object-cover" />
+                        <button
+                          onClick={() => {
+                            setDraftImageFiles(draftImageFiles.filter((_, i) => i !== idx));
+                            setDraftImagePreviews(draftImagePreviews.filter((_, i) => i !== idx));
+                          }}
+                          className="absolute top-1 right-1 bg-white/90 dark:bg-slate-700/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm"
+                          title="Remove image"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+
+                    {selectedAssignment.status === 'DRAFT' && (
+                      <label className="w-24 h-24 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-all hover:border-indigo-400 active:scale-95">
+                        <input type="file" accept="image/*" onChange={handleDraftImageChange} className="hidden" />
+                        <span className="text-3xl text-slate-300 font-light">+</span>
+                      </label>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {selectedAssignment.status === 'DRAFT' && draftEdit && (
+                <div className="space-y-3">
+                  <h4 className="text-xl font-black">Marking Criteria</h4>
+                  <div className="space-y-2">
+                    {draftEdit.markingPoints.map((c, i) => (
+                      <div key={i} className="flex gap-2 items-center bg-slate-50 dark:bg-slate-700/60 p-3 rounded-xl border border-slate-100 dark:border-slate-700">
+                        <span className="text-xs font-black text-indigo-600 bg-white dark:bg-slate-800 w-6 h-6 rounded-lg flex items-center justify-center shadow-sm">{i + 1}</span>
+                        <input
+                          className="bg-transparent border-none text-sm font-bold flex-1 focus:ring-0"
+                          value={c.point}
+                          onChange={e => {
+                            const updated = [...draftEdit.markingPoints];
+                            updated[i] = { ...updated[i], point: e.target.value };
+                            setDraftEdit({ ...draftEdit, markingPoints: updated });
+                          }}
+                        />
+                        <input
+                          type="number"
+                          className="w-16 bg-white dark:bg-slate-800 border-none rounded-lg text-sm font-black text-center focus:ring-1 focus:ring-indigo-500"
+                          value={c.weight}
+                          onChange={e => {
+                            const updated = [...draftEdit.markingPoints];
+                            updated[i] = { ...updated[i], weight: parseInt(e.target.value) || 0 };
+                            setDraftEdit({ ...draftEdit, markingPoints: updated });
+                          }}
+                        />
+                        <button
+                          onClick={() => {
+                            const updated = draftEdit.markingPoints.filter((_, idx) => idx !== i);
+                            setDraftEdit({ ...draftEdit, markingPoints: updated });
+                          }}
+                          className="w-6 h-6 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 flex items-center justify-center transition-colors"
+                          title="Delete criterion"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      onClick={() => setDraftEdit({ ...draftEdit, markingPoints: [...draftEdit.markingPoints, { point: '', weight: 1 }] })}
+                      className="w-full py-2 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-400 hover:border-indigo-400 hover:text-indigo-400 transition-all"
+                    >
+                      + Add Rule
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="space-y-4">
                 <h4 className="text-xl font-black">Student Submissions</h4>
@@ -280,13 +466,29 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
                     Close
                   </button>
                   <button
+                    disabled={isSaving || !draftEdit}
+                    onClick={async () => {
+                      if (!draftEdit) return;
+                      setIsSaving(true);
+                      try {
+                        await persistDraft('DRAFT');
+                        alert('Draft updated!');
+                      } catch (err: any) {
+                        alert('Failed to update draft: ' + err.message);
+                      } finally {
+                        setIsSaving(false);
+                      }
+                    }}
+                    className="flex-1 py-4 bg-slate-900 dark:bg-slate-200 text-white dark:text-slate-900 rounded-2xl font-black shadow-xl transition-all active:scale-95 disabled:opacity-50"
+                  >
+                    {isSaving ? 'Saving...' : 'Save Changes'}
+                  </button>
+                  <button
                     disabled={isSaving}
                     onClick={async () => {
                       setIsSaving(true);
                       try {
-                        const updatedAssignment = { ...selectedAssignment, status: 'PUBLISHED' as const };
-                        await dbService.saveAssignment(adminId, updatedAssignment);
-                        setAssignments(prev => prev.map(a => a.id === selectedAssignment.id ? updatedAssignment : a));
+                        const updatedAssignment = await persistDraft('PUBLISHED');
                         setSelectedAssignment(null);
                         alert('Assignment published successfully!');
                       } catch (err: any) {
