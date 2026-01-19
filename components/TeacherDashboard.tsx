@@ -1,9 +1,9 @@
 
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { Assignment, Submission, MarkingCriterion, Teacher, Student, Subject, Class } from '../types';
+import { Assignment, Submission, MarkingCriterion, Teacher, Student, Subject, Class, NoteCorrection, GeneratedNote } from '../types';
 import { dbService } from '../services/dbService';
-import { extractMarkingPoints, analyzeTeachingNote, NoteSectionDraft, NoteAnalysisResult } from '../services/geminiService';
+import { extractMarkingPoints, analyzeTeachingNote, NoteSectionDraft, NoteAnalysisResult, createEnhancedNote, extractCorrectionSummary, applyNoteCorrection } from '../services/geminiService';
 
 const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ teacherId, adminId }) => {
   const [teacher, setTeacher] = useState<Teacher | null>(null);
@@ -891,8 +891,35 @@ const TeacherNotes: React.FC<{
   const [sections, setSections] = useState<NoteSectionDraft[]>([]);
   const [summary, setSummary] = useState('');
   const [isSavingDrafts, setIsSavingDrafts] = useState(false);
+  const [enhancedNote, setEnhancedNote] = useState<string | null>(null);
+  const [isGeneratingEnhancedNote, setIsGeneratingEnhancedNote] = useState(false);
+  const [originalEnhancedNote, setOriginalEnhancedNote] = useState<string | null>(null);
+  const [isSavingCorrections, setIsSavingCorrections] = useState(false);
+  const [latestNote, setLatestNote] = useState<GeneratedNote | null>(null);
+  const [noteHistory, setNoteHistory] = useState<GeneratedNote[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [correctionPrompt, setCorrectionPrompt] = useState('');
+  const [isApplyingCorrection, setIsApplyingCorrection] = useState(false);
 
   if (!teacher) return null;
+
+  // Load latest note when subject/class changes
+  useEffect(() => {
+    const loadLatestNote = async () => {
+      if (!selectedClassId || !selectedSubjectId) {
+        setLatestNote(null);
+        return;
+      }
+      try {
+        const latest = await dbService.getLatestNote(adminId, selectedSubjectId, selectedClassId);
+        setLatestNote(latest);
+      } catch (err) {
+        console.log('Could not load latest note:', err);
+      }
+    };
+    loadLatestNote();
+  }, [selectedClassId, selectedSubjectId, adminId]);
 
   const classOptions = Array.from(new Set([
     teacher.assignedClassId,
@@ -949,6 +976,283 @@ const TeacherNotes: React.FC<{
     }
   };
 
+  const handleGenerateEnhancedNote = async () => {
+    if (!selectedClassId || !selectedSubjectId || noteBase64s.length === 0) {
+      alert('Please select class, subject, and upload a note.');
+      return;
+    }
+
+    setIsGeneratingEnhancedNote(true);
+    try {
+      const className = classNames[selectedClassId] || selectedClassId;
+      const subjectName = subjectNames[selectedSubjectId] || selectedSubjectId;
+      
+      // Fetch previous corrections to learn from them
+      let previousCorrectionsText = '';
+      try {
+        const corrections = await dbService.getNoteCorrections(adminId, selectedSubjectId, selectedClassId, 3);
+        if (corrections.length > 0) {
+          previousCorrectionsText = corrections.map(c => `• ${c.correctionSummary}`).join('\n');
+        }
+      } catch (err) {
+        console.log('Could not fetch previous corrections:', err);
+      }
+
+      const content = await createEnhancedNote(
+        noteBase64s,
+        { subjectName, className },
+        notePrompt.trim() || undefined,
+        previousCorrectionsText || undefined
+      );
+      setEnhancedNote(content);
+      setOriginalEnhancedNote(content); // Store original for comparison
+      
+      // Auto-save as a new note version
+      try {
+        const saved = await dbService.saveGeneratedNote(adminId, {
+          teacherId,
+          subjectId: selectedSubjectId,
+          classId: selectedClassId,
+          content,
+          isLatest: true
+        });
+        // Reload latest note
+        const latest = await dbService.getLatestNote(adminId, selectedSubjectId, selectedClassId);
+        setLatestNote(latest);
+      } catch (err) {
+        console.log('Note auto-save failed:', err);
+      }
+    } catch (err: any) {
+      alert('Failed to generate enhanced note: ' + err.message);
+    } finally {
+      setIsGeneratingEnhancedNote(false);
+    }
+  };
+
+  const markdownToHtml = (markdown: string, isDarkMode: boolean = false): string => {
+    let html = markdown;
+
+    const darkStyles = isDarkMode ? {
+      textColor: '#f3f4f6',
+      headingColor: '#ffffff',
+      codeBlockBg: '#374151',
+      codeBlockColor: '#f3f4f6',
+      inlineCodeBg: '#4b5563',
+      inlineCodeColor: '#f3f4f6',
+      quoteColor: '#d1d5db',
+      quoteBorder: '#9ca3af',
+      tableBorder: '#6b7280',
+      tableHeaderBg: '#374151',
+      tableRowBg1: 'transparent',
+      tableRowBg2: '#1f2937',
+      hrBorder: '#6b7280'
+    } : {
+      textColor: '#1f2937',
+      headingColor: '#111827',
+      codeBlockBg: '#f9fafb',
+      codeBlockColor: '#1f2937',
+      inlineCodeBg: '#e5e7eb',
+      inlineCodeColor: '#1f2937',
+      quoteColor: '#4b5563',
+      quoteBorder: '#d1d5db',
+      tableBorder: '#e5e7eb',
+      tableHeaderBg: '#f3f4f6',
+      tableRowBg1: '#ffffff',
+      tableRowBg2: '#f9fafb',
+      hrBorder: '#e5e7eb'
+    };
+
+    // Tables - MUST be processed before other replacements
+    html = html.replace(/\|(.+)\n\|[-\s:|]+\n((?:\|.+\n?)*)/g, (match) => {
+      const lines = match.trim().split('\n').filter(line => line.trim());
+      if (lines.length < 2) return match;
+
+      const headerRow = lines[0].split('|').map(cell => cell.trim()).filter(Boolean);
+      const bodyRows = lines.slice(2).map(line =>
+        line.split('|').map(cell => cell.trim()).filter(Boolean)
+      );
+
+      let table = `<table style="width: 100%; border-collapse: collapse; margin: 16px 0; border: 1px solid ${darkStyles.tableBorder};">`;
+      
+      // Header
+      table += `<thead><tr style="background-color: ${darkStyles.tableHeaderBg}; border: 1px solid ${darkStyles.tableBorder};">`;
+      headerRow.forEach(cell => {
+        table += `<th style="padding: 12px; text-align: left; font-weight: bold; border: 1px solid ${darkStyles.tableBorder}; color: ${darkStyles.headingColor};">${cell}</th>`;
+      });
+      table += '</tr></thead>';
+
+      // Body
+      table += '<tbody>';
+      bodyRows.forEach((row, idx) => {
+        table += `<tr style="background-color: ${idx % 2 === 0 ? darkStyles.tableRowBg1 : darkStyles.tableRowBg2}; border: 1px solid ${darkStyles.tableBorder};">`;
+        row.forEach(cell => {
+          table += `<td style="padding: 12px; border: 1px solid ${darkStyles.tableBorder}; color: ${darkStyles.textColor};">${cell}</td>`;
+        });
+        table += '</tr>';
+      });
+      table += '</tbody></table>';
+
+      return table;
+    });
+
+    html = html
+      // Headers
+      .replace(/^# (.*?)$/gm, `<h1 style="font-size: 2em; font-weight: bold; margin: 20px 0 10px; color: ${darkStyles.headingColor};">$1</h1>`)
+      .replace(/^## (.*?)$/gm, `<h2 style="font-size: 1.5em; font-weight: bold; margin: 16px 0 8px; color: ${darkStyles.headingColor};">$1</h2>`)
+      .replace(/^### (.*?)$/gm, `<h3 style="font-size: 1.2em; font-weight: bold; margin: 12px 0 6px; color: ${darkStyles.headingColor};">$1</h3>`)
+      // Bold
+      .replace(/\*\*(.*?)\*\*/g, `<strong style="font-weight: bold; color: ${darkStyles.textColor};">$1</strong>`)
+      // Italic
+      .replace(/\*(.*?)\*/g, `<em style="font-style: italic; color: ${darkStyles.textColor};">$1</em>`)
+      // Code blocks
+      .replace(/```([\s\S]*?)```/g, `<pre style="background: ${darkStyles.codeBlockBg}; color: ${darkStyles.codeBlockColor}; padding: 12px; border-radius: 4px; overflow-x: auto;"><code>$1</code></pre>`)
+      // Inline code
+      .replace(/`(.*?)`/g, `<code style="background: ${darkStyles.inlineCodeBg}; color: ${darkStyles.inlineCodeColor}; padding: 2px 6px; border-radius: 3px;">$1</code>`)
+      // Block quotes
+      .replace(/^> (.*?)$/gm, `<blockquote style="border-left: 4px solid ${darkStyles.quoteBorder}; padding-left: 12px; margin: 8px 0; color: ${darkStyles.quoteColor};">$1</blockquote>`)
+      // Horizontal rules
+      .replace(/^---$/gm, `<hr style="margin: 20px 0; border: none; border-top: 2px solid ${darkStyles.hrBorder};" />`)
+      // Lists (bullet points)
+      .replace(/^\- (.*?)$/gm, `<li style="margin-left: 20px; color: ${darkStyles.textColor};">$1</li>`)
+      // List wrapper
+      .replace(/(<li style="margin-left: 20px;.*?<\/li>)/s, (match) => {
+        return '<ul style="list-style: disc; margin: 8px 0;">' + match + '</ul>';
+      })
+      // Paragraphs
+      .replace(/\n\n/g, `</p><p style="margin: 12px 0; line-height: 1.6; color: ${darkStyles.textColor};">`)
+      .replace(/^(?!<[hp<])(.+)$/gm, (match) => {
+        if (match.trim() && !match.startsWith('<')) {
+          return `<p style="margin: 12px 0; line-height: 1.6; color: ${darkStyles.textColor};">${match}</p>`;
+        }
+        return match;
+      });
+
+    return `<div style="font-family: Arial, sans-serif; line-height: 1.6; color: ${darkStyles.textColor}; overflow-x: auto;">${html}</div>`;
+  };
+
+  const downloadAsPDF = async () => {
+    if (!enhancedNote) return;
+
+    // Dynamically import html2pdf when needed
+    const html2pdf = (await import('html2pdf.js')).default;
+
+    const element = document.createElement('div');
+    element.innerHTML = markdownToHtml(enhancedNote);
+
+    const opt: any = {
+      margin: 10,
+      filename: `${subjectNames[selectedSubjectId] || 'note'}_${new Date().toISOString().split('T')[0]}.pdf`,
+      image: { type: 'jpeg' as const, quality: 0.98 },
+      html2canvas: { scale: 2 },
+      jsPDF: { orientation: 'portrait', unit: 'mm', format: 'a4' }
+    };
+
+    html2pdf().set(opt).from(element).save();
+  };
+
+  const handleLoadHistory = async () => {
+    if (!selectedClassId || !selectedSubjectId) return;
+    setIsLoadingHistory(true);
+    try {
+      const history = await dbService.getNoteHistory(adminId, selectedSubjectId, selectedClassId, 10);
+      setNoteHistory(history);
+      setShowHistory(true);
+    } catch (err) {
+      alert('Failed to load note history');
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  // Formatting helper for the editor
+  const insertMarkdown = (before: string, after: string = '', placeholder: string = 'text') => {
+    const textarea = document.querySelector('textarea[placeholder="Edit the note content here..."]') as HTMLTextAreaElement;
+    if (!textarea) return;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selected = enhancedNote.substring(start, end) || placeholder;
+    const newContent = 
+      enhancedNote.substring(0, start) + 
+      before + selected + after + 
+      enhancedNote.substring(end);
+    
+    setEnhancedNote(newContent);
+    
+    // Move cursor to after inserted text
+    setTimeout(() => {
+      textarea.focus();
+      const newPos = start + before.length + selected.length;
+      textarea.setSelectionRange(newPos, newPos);
+    }, 0);
+  };
+
+  const handleApplyCorrection = async () => {
+    if (!enhancedNote || !correctionPrompt.trim()) {
+      alert('Please provide a correction instruction.');
+      return;
+    }
+
+    setIsApplyingCorrection(true);
+    try {
+      const correctedContent = await applyNoteCorrection(enhancedNote, correctionPrompt);
+      setEnhancedNote(correctedContent);
+      setCorrectionPrompt('');
+      alert('✅ Correction applied! Review the changes below.');
+    } catch (err: any) {
+      alert('Failed to apply correction: ' + err.message);
+    } finally {
+      setIsApplyingCorrection(false);
+    }
+  };
+
+  const handleSaveWithLearning = async () => {
+    if (!enhancedNote || !originalEnhancedNote || !selectedSubjectId || !selectedClassId) return;
+
+    // Check if there are actual changes
+    if (enhancedNote === originalEnhancedNote) {
+      alert('No changes detected. Note remains the same.');
+      return;
+    }
+
+    setIsSavingCorrections(true);
+    try {
+      // Extract a summary of corrections using AI
+      const correctionSummary = await extractCorrectionSummary(originalEnhancedNote, enhancedNote);
+
+      // Save the correction to Firestore for future learning
+      await dbService.saveNoteCorrection(adminId, {
+        teacherId,
+        subjectId: selectedSubjectId,
+        classId: selectedClassId,
+        originalContent: originalEnhancedNote,
+        correctedContent: enhancedNote,
+        correctionSummary
+      });
+
+      // Save the corrected note as the latest version
+      await dbService.saveGeneratedNote(adminId, {
+        teacherId,
+        subjectId: selectedSubjectId,
+        classId: selectedClassId,
+        content: enhancedNote,
+        isLatest: true
+      });
+
+      alert('✅ Corrections saved! AI will learn from your feedback on future notes.');
+      setEnhancedNote(null);
+      setOriginalEnhancedNote(null);
+      
+      // Reload latest note
+      const latest = await dbService.getLatestNote(adminId, selectedSubjectId, selectedClassId);
+      setLatestNote(latest);
+    } catch (err: any) {
+      alert('Failed to save corrections: ' + err.message);
+    } finally {
+      setIsSavingCorrections(false);
+    }
+  };
+
   const handleCreateDrafts = async () => {
     if (!selectedClassId || !selectedSubjectId || sections.length === 0) return;
     setIsSavingDrafts(true);
@@ -983,6 +1287,57 @@ const TeacherNotes: React.FC<{
         <h2 className="text-3xl font-black text-slate-800 dark:text-white tracking-tight">Notes</h2>
         <p className="text-slate-500 font-medium">Upload your teaching notes to generate draft assignments by section.</p>
       </div>
+
+      {latestNote && (
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-[2rem] p-8 border border-blue-200 dark:border-blue-700/50 shadow-sm space-y-4">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-xl font-black text-blue-900 dark:text-blue-200 flex items-center gap-2">
+                ⭐ Latest Note Version
+              </h3>
+              <p className="text-sm text-blue-700 dark:text-blue-300 mt-1">
+                Last updated: {new Date(latestNote.updatedAt).toLocaleDateString()} at {new Date(latestNote.updatedAt).toLocaleTimeString()}
+              </p>
+            </div>
+            <button
+              onClick={handleLoadHistory}
+              disabled={isLoadingHistory}
+              className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold transition-all disabled:opacity-50"
+            >
+              {isLoadingHistory ? 'Loading...' : '📜 View History'}
+            </button>
+          </div>
+
+          <div className="bg-white dark:bg-slate-800 rounded-xl p-6 max-h-[300px] overflow-y-auto border border-blue-100 dark:border-blue-700/30">
+            <div 
+              className="prose prose-sm dark:prose-invert max-w-none"
+              dangerouslySetInnerHTML={{ __html: markdownToHtml(latestNote.content, document.documentElement.classList.contains('dark')) }}
+              style={{
+                fontSize: '13px',
+                lineHeight: '1.6'
+              }}
+            />
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => {
+                if (latestNote) {
+                  setEnhancedNote(latestNote.content);
+                  setOriginalEnhancedNote(latestNote.content);
+                  // Scroll to editing section
+                  setTimeout(() => {
+                    document.getElementById('enhanced-note-editor')?.scrollIntoView({ behavior: 'smooth' });
+                  }, 100);
+                }
+              }}
+              className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold transition-all"
+            >
+              ✏️ Edit This Note
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="bg-white dark:bg-slate-800 rounded-[2rem] p-8 border border-slate-200 dark:border-slate-700 shadow-sm space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1049,7 +1404,7 @@ const TeacherNotes: React.FC<{
           />
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex gap-3 flex-wrap">
           <button
             onClick={handleAnalyze}
             disabled={isAnalyzing}
@@ -1058,10 +1413,18 @@ const TeacherNotes: React.FC<{
             {isAnalyzing ? 'Analyzing...' : 'Analyze with AI'}
           </button>
           <button
+            onClick={handleGenerateEnhancedNote}
+            disabled={isGeneratingEnhancedNote}
+            className="px-6 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black shadow-lg shadow-emerald-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
+          >
+            {isGeneratingEnhancedNote ? 'Generating...' : 'Create Enhanced Note'}
+          </button>
+          <button
             onClick={() => {
               setAnalysis(null);
               setSections([]);
               setSummary('');
+              setEnhancedNote(null);
               setNotePrompt('');
             }}
             className="px-6 py-3 rounded-2xl bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold transition-all"
@@ -1169,6 +1532,162 @@ const TeacherNotes: React.FC<{
               Reset Review
             </button>
           </div>
+        </div>
+      )}
+
+      {enhancedNote && (
+        <div id="enhanced-note-editor" className="bg-white dark:bg-slate-800 rounded-[2rem] p-8 border border-slate-200 dark:border-slate-700 shadow-sm space-y-6">
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h3 className="text-2xl font-black">📖 Enhanced Study Note</h3>
+              <p className="text-sm text-slate-500 mt-1">Review and edit. Changes will help AI improve future notes.</p>
+            </div>
+            <button
+              onClick={downloadAsPDF}
+              className="px-6 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black shadow-lg shadow-blue-100 dark:shadow-none transition-all active:scale-95"
+              title="Download as PDF"
+            >
+              📥 Download PDF
+            </button>
+          </div>
+
+          <div className="space-y-6">
+            {enhancedNote !== originalEnhancedNote && (
+              <div className="bg-amber-50 dark:bg-amber-900/20 border-2 border-amber-200 dark:border-amber-700/50 rounded-xl p-4">
+                <p className="text-sm text-amber-800 dark:text-amber-200 font-bold">✏️ You have made changes. Save with learning to help improve future notes.</p>
+              </div>
+            )}
+
+            <div 
+              className="prose prose-slate dark:prose-invert max-w-none"
+              dangerouslySetInnerHTML={{ __html: markdownToHtml(enhancedNote, document.documentElement.classList.contains('dark')) }}
+            />
+          </div>
+
+          {/* AI-Powered Correction Prompt */}
+          <div className="bg-blue-50 dark:bg-blue-900/20 rounded-2xl p-6 border-2 border-blue-200 dark:border-blue-700/50 space-y-4">
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-xl">🤖</span>
+              <h4 className="text-lg font-black text-blue-900 dark:text-blue-200">AI-Powered Corrections</h4>
+            </div>
+            
+            <div className="space-y-2">
+              <label className="text-[10px] font-black uppercase text-blue-700 dark:text-blue-300 tracking-widest ml-1">
+                Give AI a specific instruction
+              </label>
+              <textarea
+                value={correctionPrompt}
+                onChange={e => setCorrectionPrompt(e.target.value)}
+                placeholder="Examples:
+• Add a summary table comparing the three types
+• Modify the photosynthesis section with more real-world examples
+• Add a practice questions section at the end with 5 questions
+• Insert a detailed explanation of stomata under the key concepts section"
+                className="input-style h-28"
+              />
+            </div>
+
+            <p className="text-xs text-blue-700 dark:text-blue-300 font-medium">
+              💡 Be specific! Tell AI what to add, modify, or remove and where to place it.
+            </p>
+
+            <button
+              onClick={handleApplyCorrection}
+              disabled={isApplyingCorrection || !correctionPrompt.trim()}
+              className="w-full px-6 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black shadow-lg shadow-blue-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
+            >
+              {isApplyingCorrection ? '⏳ Applying Correction...' : '✨ Apply Correction'}
+            </button>
+          </div>
+
+
+
+          <div className="flex gap-3 flex-wrap">
+            <button
+              onClick={handleSaveWithLearning}
+              disabled={isSavingCorrections || enhancedNote === originalEnhancedNote}
+              className="px-6 py-3 rounded-2xl bg-green-600 hover:bg-green-700 text-white font-black shadow-lg shadow-green-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
+              title="Save corrections and learn from them"
+            >
+              {isSavingCorrections ? 'Learning...' : '🧠 Save & Learn'}
+            </button>
+            <button
+              onClick={downloadAsPDF}
+              className="px-6 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black shadow-lg shadow-blue-100 dark:shadow-none transition-all active:scale-95"
+              title="Download without saving corrections"
+            >
+              💾 Save as PDF
+            </button>
+            <button
+              onClick={() => {
+                setEnhancedNote(null);
+                setOriginalEnhancedNote(null);
+              }}
+              className="px-6 py-3 rounded-2xl bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold transition-all"
+            >
+              Discard
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showHistory && (
+        <div className="bg-white dark:bg-slate-800 rounded-[2rem] p-8 border border-slate-200 dark:border-slate-700 shadow-sm space-y-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-2xl font-black">📜 Note History</h3>
+            <button
+              onClick={() => setShowHistory(false)}
+              className="text-2xl font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+            >
+              ✕
+            </button>
+          </div>
+
+          {noteHistory.length === 0 ? (
+            <div className="text-center py-12 text-slate-500">
+              <p className="text-lg">No previous notes found.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {noteHistory.map((note, idx) => (
+                <div
+                  key={note.id}
+                  className={`p-6 rounded-2xl border-2 transition-all cursor-pointer ${
+                    note.isLatest
+                      ? 'bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-700'
+                      : 'bg-slate-50 dark:bg-slate-700/40 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
+                  }`}
+                  onClick={() => {
+                    setEnhancedNote(note.content);
+                    setOriginalEnhancedNote(note.content);
+                    setShowHistory(false);
+                    setTimeout(() => {
+                      document.getElementById('enhanced-note-editor')?.scrollIntoView({ behavior: 'smooth' });
+                    }, 100);
+                  }}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div>
+                      <p className="text-sm font-bold text-slate-700 dark:text-slate-200">
+                        {note.isLatest ? '⭐ Latest - ' : ''}{new Date(note.updatedAt).toLocaleDateString()} {new Date(note.updatedAt).toLocaleTimeString()}
+                      </p>
+                    </div>
+                    <span className="text-xs font-black uppercase bg-slate-200 dark:bg-slate-600 px-3 py-1 rounded-lg">
+                      {idx === 0 ? 'Current' : `v${noteHistory.length - idx}`}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2">{note.content.substring(0, 150)}...</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button
+            onClick={() => setShowHistory(false)}
+            className="w-full px-6 py-3 rounded-2xl bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold transition-all"
+          >
+            Close History
+          </button>
         </div>
       )}
     </div>
