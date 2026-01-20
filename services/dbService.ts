@@ -5,7 +5,7 @@ import {
   updateDoc, arrayUnion, serverTimestamp, deleteDoc, arrayRemove, deleteField
 } from 'firebase/firestore';
 import { db, firebaseConfig } from './firebase';
-import { School, Teacher, Grade, Class, Subject, Student, AssignedSubject, UserRole, Assignment, Submission } from '../types';
+import { School, Teacher, Grade, Class, Subject, Student, AssignedSubject, UserRole, Assignment, Submission, NoteCorrection, GeneratedNote } from '../types';
 
 // Secondary app for creating users without signing out the current one
 const secondaryApp = getApps().find(a => a.name === 'Secondary') || initializeApp(firebaseConfig, "Secondary");
@@ -330,5 +330,97 @@ export const dbService = {
     const q = query(getNestedColl(adminId, 'submissions'), where('studentId', '==', studentId));
     const snap = await getDocs(q);
     return snap.docs.map(d => d.data() as Submission).sort((a, b) => (b.gradedAt || 0) - (a.gradedAt || 0));
+  },
+
+  // --- Note Corrections (Learning from Teacher Feedback) ---
+  async saveNoteCorrection(adminId: string, correction: Omit<NoteCorrection, 'id' | 'createdAt'>) {
+    const docRef = await addDoc(getNestedColl(adminId, 'noteCorrections'), {
+      ...correction,
+      createdAt: serverTimestamp()
+    });
+    return docRef.id;
+  },
+
+  async getNoteCorrections(adminId: string, subjectId: string, classId: string, limit: number = 5): Promise<NoteCorrection[]> {
+    const q = query(
+      getNestedColl(adminId, 'noteCorrections'),
+      where('subjectId', '==', subjectId),
+      where('classId', '==', classId)
+    );
+    const snap = await getDocs(q);
+    return snap.docs
+      .map(d => {
+        const data = d.data();
+        return {
+          ...data,
+          createdAt: data.createdAt?.toMillis?.() || Date.now()
+        } as NoteCorrection;
+      })
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, limit);
+  },
+
+  // --- Generated Notes (Persistent Note Storage) ---
+  async saveGeneratedNote(adminId: string, note: Omit<GeneratedNote, 'id' | 'createdAt' | 'updatedAt'>) {
+    // If this is a new latest note for this subject/class, mark old ones as not latest
+    const q = query(
+      getNestedColl(adminId, 'generatedNotes'),
+      where('subjectId', '==', note.subjectId),
+      where('classId', '==', note.classId),
+      where('isLatest', '==', true)
+    );
+    const snap = await getDocs(q);
+    
+    // Mark previous latest as not latest
+    for (const doc of snap.docs) {
+      await updateDoc(doc.ref, { isLatest: false });
+    }
+
+    // Save new note as latest
+    const docRef = await addDoc(getNestedColl(adminId, 'generatedNotes'), {
+      ...note,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      isLatest: true
+    });
+    return docRef.id;
+  },
+
+  async getLatestNote(adminId: string, subjectId: string, classId: string): Promise<GeneratedNote | null> {
+    const q = query(
+      getNestedColl(adminId, 'generatedNotes'),
+      where('subjectId', '==', subjectId),
+      where('classId', '==', classId),
+      where('isLatest', '==', true)
+    );
+    const snap = await getDocs(q);
+    if (snap.empty) return null;
+    
+    const data = snap.docs[0].data();
+    return {
+      ...data,
+      createdAt: data.createdAt?.toMillis?.() || Date.now(),
+      updatedAt: data.updatedAt?.toMillis?.() || Date.now()
+    } as GeneratedNote;
+  },
+
+  async getNoteHistory(adminId: string, subjectId: string, classId: string, limit: number = 10): Promise<GeneratedNote[]> {
+    const q = query(
+      getNestedColl(adminId, 'generatedNotes'),
+      where('subjectId', '==', subjectId),
+      where('classId', '==', classId)
+    );
+    const snap = await getDocs(q);
+    return snap.docs
+      .map(d => {
+        const data = d.data();
+        return {
+          ...data,
+          createdAt: data.createdAt?.toMillis?.() || Date.now(),
+          updatedAt: data.updatedAt?.toMillis?.() || Date.now()
+        } as GeneratedNote;
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, limit);
   }
 };

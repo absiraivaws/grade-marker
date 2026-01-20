@@ -99,3 +99,25 @@ export interface AIResponse {
   feedback: string;
   criteriasMet: boolean[];
 }
+
+export interface GeneratedNote {
+  id: string;
+  teacherId: string;
+  subjectId: string;
+  classId: string;
+  content: string;
+  createdAt: number;
+  updatedAt: number;
+  isLatest: boolean;
+}
+
+export interface NoteCorrection {
+  id: string;
+  teacherId: string;
+  subjectId: string;
+  classId: string;
+  originalContent: string;
+  correctedContent: string;
+  correctionSummary: string; // AI-generated summary of what was corrected
+  createdAt: number;
+}
