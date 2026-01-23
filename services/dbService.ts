@@ -422,5 +422,25 @@ export const dbService = {
       })
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, limit);
+  },
+
+  async getAllNotesForClassSubject(adminId: string, subjectId: string, classId: string): Promise<GeneratedNote[]> {
+    const q = query(
+      getNestedColl(adminId, 'generatedNotes'),
+      where('subjectId', '==', subjectId),
+      where('classId', '==', classId),
+      where('isLatest', '==', true)
+    );
+    const snap = await getDocs(q);
+    return snap.docs
+      .map(d => {
+        const data = d.data();
+        return {
+          ...data,
+          createdAt: data.createdAt?.toMillis?.() || Date.now(),
+          updatedAt: data.updatedAt?.toMillis?.() || Date.now()
+        } as GeneratedNote;
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 };

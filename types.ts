@@ -106,6 +106,7 @@ export interface GeneratedNote {
   subjectId: string;
   classId: string;
   content: string;
+  moduleTitle: string; // Module name/number (e.g., "Module 1: Introduction to Physics")
   createdAt: number;
   updatedAt: number;
   isLatest: boolean;

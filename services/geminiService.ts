@@ -218,48 +218,242 @@ export const createEnhancedNote = async (
   noteFilesBase64: string[],
   context: { subjectName: string; className: string },
   teacherPrompt?: string,
-  previousCorrections?: string
+  previousCorrections?: string,
+  extractedText?: string,
+  pageImages?: Array<{ pageNumber: number; url: string }>
 ): Promise<string> => {
   const ai = getAI();
 
   const prompt = `
 You are an expert teacher and curriculum designer.
-Your task: Deeply analyze the provided teaching materials (PDFs, textbooks, guides, images, etc.) and create a comprehensive, well-structured study note for students.
+Your task: Deeply analyze the provided teaching materials and create a comprehensive, well-structured study note for students.
 
 Context:
 Subject: ${context.subjectName}
 Class: ${context.className}
 ${teacherPrompt ? `Teacher's Focus/Unit: ${teacherPrompt}` : ''}
 ${previousCorrections ? `Previous Teacher Feedback on Similar Notes:\n${previousCorrections}` : ''}
+${extractedText ? `\n\nExtracted Text Content:\n${extractedText.substring(0, 50000)}` : ''}
+${pageImages ? `\n\nAvailable page images: ${pageImages.map(p => `Page ${p.pageNumber}`).join(', ')}` : ''}
 
-Instructions:
-1. Thoroughly analyze all uploaded materials in sequence
-2. Synthesize key concepts, explanations, examples, and learning objectives
-3. For any diagrams, charts, tables, or visual elements: describe them clearly in text format using [DIAGRAM: description], [CHART: description], [FIGURE: description], etc.
-4. Organize the note with clear hierarchical structure:
-   - Main title
-   - Learning Objectives (bullet list)
-   - Key Concepts (with explanations)
-   - Worked Examples with step-by-step solutions
-   - Important Formulas or Rules (if applicable)
-   - Visual Element Descriptions (from the materials)
-   - Summary/Key Takeaways
-   - Practice Tips for Students
-5. Use markdown formatting:
-   - # for main title
-   - ## for sections
-   - ### for subsections
-   - **bold** for emphasis
-   - - for bullet points
-   - > for important notes
-6. If the teacher specified a unit/topic, focus deeply on that content
-7. Draw connections between concepts when relevant
-8. Include real-world applications when applicable
-9. Make it accessible to the specified class level
-10. Return ONLY the complete markdown-formatted note content, no additional text
+CRITICAL INSTRUCTIONS FOR VISUAL ELEMENTS:
 
-Create a comprehensive, student-friendly study note:
+1. FORMULAS & EQUATIONS - Use LaTeX syntax:
+   
+   BLOCK FORMULAS (display mode) - wrap in $$...$$:
+   $$x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$
+   
+   INLINE FORMULAS - wrap in $...$ (no line breaks):
+   The formula $E = mc^2$ shows energy-mass equivalence.
+   
+   FRACTIONS: Use \\frac{numerator}{denominator}
+   Example: $$\\frac{1}{10}$$ or $$\\frac{7}{100}$$
+
+   VERTICAL MATH (Addition/Subtraction):
+   Use generic 'array' with simple alignment (r for right).
+   Example:
+   $$
+   \\begin{array}{r}
+     2.57 \\\\
+   +\\, 1.68 \\\\
+   \\hline
+     4.25
+   \\end{array}
+   $$
+   (Avoid complex column specifications like @{\\quad} which may break rendering)
+   
+   OPERATORS: Use \\times for ×, \\div for ÷, \\pm for ±
+   Example: $$a \\times b = c$$ or $$12 \\div 4 = 3$$
+   
+   MULTIPLE EQUATIONS (aligned):
+   $$\\begin{aligned}
+   2.57 + 1.68 &= 4.25 \\\\
+   12.70 - 8.53 &= 4.17
+   \\end{aligned}$$
+   
+   IMPORTANT: For inline math, NEVER use $$. Only use $ for inline.
+   IMPORTANT: Escape backslashes properly: \\frac not \frac
+
+2. DIAGRAMS & FLOWCHARTS - CRITICAL: Use simple, error-free Mermaid syntax
+   
+   MANDATORY FORMAT - Always wrap in code fences:
+   \`\`\`mermaid
+   [diagram code here]
+   \`\`\`
+   
+   SAFE FLOWCHART SYNTAX (use flowchart TD or LR):
+   \`\`\`mermaid
+   flowchart TD
+       A[Start] --> B[Step 1]
+       B --> C{Decision?}
+       C -->|Yes| D[Option A]
+       C -->|No| E[Option B]
+   \`\`\`
+   
+   SAFE PIE CHART SYNTAX:
+   \`\`\`mermaid
+   pie
+       title Parts of Number
+       "Tenths" : 10
+       "Hundredths" : 1
+       "Rest" : 89
+   \`\`\`
+   
+   SAFE GRAPH SYNTAX (for simple relationships):
+   \`\`\`mermaid
+   graph TD
+       A[Decimal Number]
+       B[Whole Part]
+       C[Decimal Part]
+       A --> B
+       A --> C
+       B --> D[Tens]
+       B --> E[Ones]
+       C --> F[Tenths]
+       C --> G[Hundredths]
+   \`\`\`
+   
+   AVOID:
+   - Double parentheses like ((.))
+   - Complex style commands
+   - Special characters in labels
+   - Nested structures
+   
+   RULES:
+   - Use simple node shapes: [] for rectangles, {} for diamonds
+   - Keep labels simple and short
+   - Use --> for arrows
+   - One statement per line
+   \`\`\`mermaid
+   pie title Parts of a Whole
+       "Tenths: 0.1" : 10
+       "Hundredths: 0.01" : 1
+       "Remaining" : 89
+   \`\`\`
+   
+   Class diagram example (for relationships, hierarchies):
+   \`\`\`mermaid
+   classDiagram
+       Number <|-- Decimal
+       Number <|-- Fraction
+       Decimal : +wholeNumber
+       Decimal : +tenths
+       Decimal : +hundredths
+       Decimal: +compare()
+   \`\`\`
+
+3. CHARTS & GRAPHS - Create meaningful visual representations:
+   Use Mermaid to show relationships, comparisons, hierarchies
+   
+4. DO NOT request textbook images with [IMAGE:pageX] markers
+   Instead, CREATE diagrams using Mermaid when students need visual help
+   
+   Examples of when to create diagrams:
+   - Place value systems → Use Mermaid graph
+   - Problem-solving steps → Use flowchart
+   - Comparison processes → Use flowchart with decision nodes
+   - Proportions or parts → Use pie chart
+   - Concept relationships → Use class diagram or graph
+   
+   Flowchart example:
+   \`\`\`mermaid
+   flowchart TD
+       A[Photosynthesis] --> B[Light Reaction]
+       A --> C[Calvin Cycle]
+       B --> D[ATP Production]
+       C --> D
+   \`\`\`
+   
+   Sequence example:
+   \`\`\`mermaid
+   sequenceDiagram
+       Student->>Teacher: Submit Work
+       Teacher->>AI: Grade Work
+       AI->>Teacher: Return Score
+       Teacher->>Student: Provide Feedback
+   \`\`\`
+   
+   Class diagram example:
+   \`\`\`mermaid
+   classDiagram
+       Animal <|-- Duck
+       Animal <|-- Fish
+       Animal : +int age
+       Animal : +String gender
+       Animal: +isMammal()
+   \`\`\`
+
+3. CHARTS & GRAPHS - Use Mermaid where possible:
+   
+   MANDATORY: 
+   - Ensure Mermaid code is "dense" (no empty lines between the code lines).
+   - IMPORTANT: If a label contains special characters like parentheses (), quotes "", or brackets [], you MUST wrap the label in double quotes.
+     Example: A["Right Angles (90°)"] instead of A[Right Angles (90°)]
+   
+   Pie chart:
+   \`\`\`mermaid
+   pie title Cell Composition
+   "Water" : 70
+   "Proteins" : 15
+   \`\`\`
+   
+   Bar chart (as graph):
+   \`\`\`mermaid
+   graph LR
+   B["Size (μm)"] --> C["Plant Cell (50)"]
+   \`\`\`
+
+4. EMBEDDED IMAGES:
+   We have extracted specific images/diagrams from the PDF.
+   
+   If you absolutely need to reference an image from the source, use:
+   [IMAGE:embedded_image] and add a caption.
+   
+5. CLASS DIAGRAMS & FLOWCHARTS (Specific Request):
+   Use standard Mermaid \`classDiagram\` syntax. For hierarchies, use \`classDiagram\`. For processes, use \`flowchart TD\`.
+   CRITICAL: Wrap all node labels containing spaces or special characters (like (), [], {}, .) in double quotes to prevent syntax errors. Example: \`id["Label (Text)"]\`.
+   
+   Hierarchy Example:
+   \`\`\`mermaid
+   classDiagram
+   Quadrilateral <|-- Trapezium
+   Quadrilateral <|-- Parallelogram
+   Parallelogram <|-- Rhombus
+   class Trapezium {
+   +"One pair (sides)"
+   }
+   \`\`\`
+
+   Process Example:
+   \`\`\`mermaid
+   flowchart TD
+   A[Start] --> B["Process (Step 1)"]
+   B --> C[End]
+   \`\`\`
+
+CONTENT STRUCTURE:
+1. Main title (# Title)
+2. Learning Objectives (bullet list)
+3. Key Concepts with explanations
+4. Visual elements (formulas, diagrams, charts)
+5. Worked Examples with step-by-step solutions
+6. Important formulas in LaTeX
+7. Summary/Key Takeaways
+8. Practice Tips
+
+Use markdown formatting:
+- # for main title
+- ## for sections
+- ### for subsections
+- **bold** for emphasis
+- - for bullet points
+- > for important notes
+- Tables with | syntax
+- Code blocks with \`\`\`
+
+Create a comprehensive, student-friendly study note with rich visual elements (especially dense Mermaid diagrams for structural concepts):
   `;
+
 
   const noteParts = noteFilesBase64.map(file => ({
     inlineData: {
@@ -290,18 +484,18 @@ export const extractCorrectionSummary = async (
   const prompt = `
 You are a curriculum analysis expert. 
 Two versions of a teaching note are provided:
-1. ORIGINAL (before teacher edits)
-2. CORRECTED (after teacher review and edits)
+  1. ORIGINAL(before teacher edits)
+  2. CORRECTED(after teacher review and edits)
 
 Analyze the differences and create a concise summary of what the teacher corrected or improved.
 Focus on:
-- Content accuracy improvements
-- Clarity enhancements
-- Structure/organization changes
-- Added or removed concepts
-- Examples or explanations that were revised
+  - Content accuracy improvements
+    - Clarity enhancements
+      - Structure / organization changes
+        - Added or removed concepts
+          - Examples or explanations that were revised
 
-Return a 2-3 sentence summary of the key corrections/improvements.
+Return a 2 - 3 sentence summary of the key corrections / improvements.
 Be specific about what was changed and why it matters for future note generation.
 `;
 
@@ -310,8 +504,8 @@ Be specific about what was changed and why it matters for future note generation
     contents: {
       parts: [
         { text: prompt },
-        { text: `ORIGINAL:\n${originalContent}` },
-        { text: `CORRECTED:\n${correctedContent}` }
+        { text: `ORIGINAL: \n${originalContent} ` },
+        { text: `CORRECTED: \n${correctedContent} ` }
       ]
     }
   });
@@ -326,7 +520,7 @@ export const applyNoteCorrection = async (
   const ai = getAI();
 
   const prompt = `
-You are an expert teaching content editor.
+You are an expert teaching content editor with expertise in creating visual educational materials.
 
 Current Note Content:
 ${currentNoteContent}
@@ -334,15 +528,51 @@ ${currentNoteContent}
 Teacher's Correction Request:
 ${correctionPrompt}
 
-Task: Carefully read the teacher's correction request and modify the note accordingly.
+  Task: Carefully read the teacher's correction request and modify the note accordingly.
+
+VISUAL ELEMENT INSTRUCTIONS(Use these when adding new content):
+
+  1. FORMULAS & EQUATIONS - Use LaTeX syntax:
+   Display math: $$x = \\frac{ -b \\pm \\sqrt{ b ^ 2 - 4ac } } { 2a } $$
+   Inline math: $E = mc ^ 2$
+
+  2. DIAGRAMS - Use Mermaid syntax:
+
+  Flowchart:
+\`\`\`mermaid
+   flowchart TD
+       A[Start] --> B[Process]
+       B --> C[End]
+   \`\`\`
+   
+   Sequence:
+   \`\`\`mermaid
+   sequenceDiagram
+       A->>B: Message
+       B->>C: Response
+   \`\`\`
+   
+   Pie chart:
+   \`\`\`mermaid
+   pie title Data
+       "Category A" : 40
+       "Category B" : 60
+   \`\`\`
+
+3. TABLES - Use markdown table syntax:
+   | Header 1 | Header 2 |
+   | -------- | -------- |
+   | Data 1   | Data 2   |
 
 Rules:
 1. Preserve all existing content unless explicitly asked to modify it
-2. Maintain the same markdown format and structure
-3. Add new content in the appropriate section as requested
-4. If a section doesn't exist, create it with proper hierarchy
-5. Keep the tone and style consistent with the rest of the note
-6. Return ONLY the complete modified markdown note, nothing else
+2. Maintain markdown format and structure
+3. Use LaTeX for any math formulas
+4. Use Mermaid for any diagrams, flowcharts, or charts
+5. Add new content in the appropriate section as requested
+6. If a section doesn't exist, create it with proper hierarchy (##, ###)
+7. Keep the tone and style consistent with the rest of the note
+8. Return ONLY the complete modified markdown note, nothing else
 
 Modified Note:
 `;
@@ -357,4 +587,47 @@ Modified Note:
   });
 
   return response.text || currentNoteContent;
+};
+
+export const extractModuleTitle = async (noteContent: string): Promise<string> => {
+  const ai = getAI();
+
+  const prompt = `
+You are an expert at analyzing educational content and extracting module/chapter information.
+
+Analyze this study note content and extract or generate an appropriate module title:
+
+${noteContent.substring(0, 3000)}
+
+Task: Determine the module/chapter/unit title for this content.
+
+Look for:
+1. Explicit module numbers (Module 1, Module 2, Chapter 1, Unit 1, etc.)
+2. Main topic/theme that could serve as a title
+3. First heading or main title in the content
+
+Return a concise module title in one of these formats:
+- "Module X: Topic Name" (if module number is clear)
+- "Chapter X: Topic Name" (if chapter number is clear)
+- "Unit X: Topic Name" (if unit number is clear)
+- "Topic Name" (if no module number is found)
+
+Examples:
+- "Module 1: Introduction to Photosynthesis"
+- "Chapter 3: Newton's Laws of Motion"
+- "Unit 2: Cell Structure and Function"
+- "Introduction to Algebra"
+
+Return ONLY the title, nothing else.
+`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: {
+      parts: [{ text: prompt }]
+    }
+  });
+
+  const title = response.text?.trim() || 'Untitled Module';
+  return title;
 };
