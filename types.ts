@@ -110,6 +110,7 @@ export interface GeneratedNote {
   createdAt: number;
   updatedAt: number;
   isLatest: boolean;
+  groupId?: string; // ID of the first note in this series (for versioning)
 }
 
 export interface NoteCorrection {

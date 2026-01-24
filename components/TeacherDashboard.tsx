@@ -1178,6 +1178,7 @@ const TeacherNotes: React.FC<{
   const [moduleTitle, setModuleTitle] = useState('');
   const [allModuleNotes, setAllModuleNotes] = useState<GeneratedNote[]>([]);
   const [expandedModules, setExpandedModules] = useState<{ [key: string]: boolean }>({});
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
 
   // Initialize Mermaid
 
@@ -1382,7 +1383,8 @@ const TeacherNotes: React.FC<{
         classId: selectedClassId,
         content: enhancedNote,
         moduleTitle: moduleTitle.trim(),
-        isLatest: true
+        isLatest: true,
+        groupId: editingGroupId || undefined
       });
 
       // Reload all module notes
@@ -1611,6 +1613,7 @@ const TeacherNotes: React.FC<{
                           setOriginalEnhancedNote(note.content);
                           setModuleTitle(note.moduleTitle);
                           setSuggestedModuleTitle(note.moduleTitle);
+                          setEditingGroupId(note.groupId || note.id);
                           setTimeout(() => {
                             document.getElementById('enhanced-note-editor')?.scrollIntoView({ behavior: 'smooth' });
                           }, 100);
@@ -1671,6 +1674,7 @@ const TeacherNotes: React.FC<{
                 if (latestNote) {
                   setEnhancedNote(latestNote.content);
                   setOriginalEnhancedNote(latestNote.content);
+                  setEditingGroupId(latestNote.groupId || latestNote.id);
                   // Scroll to editing section
                   setTimeout(() => {
                     document.getElementById('enhanced-note-editor')?.scrollIntoView({ behavior: 'smooth' });
@@ -1772,6 +1776,7 @@ const TeacherNotes: React.FC<{
               setSummary('');
               setEnhancedNote(null);
               setNotePrompt('');
+              setEditingGroupId(null);
             }}
             className="px-6 py-3 rounded-2xl bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold transition-all"
           >
