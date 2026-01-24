@@ -1338,6 +1338,21 @@ const TeacherNotes: React.FC<{
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [isPresenting, setIsPresenting] = useState(false);
 
+  // Track dark mode changes
+  const [isDarkMode, setIsDarkMode] = useState(document.documentElement.classList.contains('dark'));
+
+  useEffect(() => {
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+          setIsDarkMode(document.documentElement.classList.contains('dark'));
+        }
+      });
+    });
+    observer.observe(document.documentElement, { attributes: true });
+    return () => observer.disconnect();
+  }, []);
+
   // Initialize Mermaid
 
 
@@ -1826,7 +1841,7 @@ const TeacherNotes: React.FC<{
 
                   {isExpanded && (
                     <div className="px-6 py-4 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40">
-                      <MarkdownRenderer content={note.content} isDarkMode={document.documentElement.classList.contains('dark')} />
+                      <MarkdownRenderer content={note.content} isDarkMode={isDarkMode} />
                     </div>
                   )}
                 </div>
@@ -1857,7 +1872,7 @@ const TeacherNotes: React.FC<{
           </div>
 
           <div className="bg-white dark:bg-slate-800 rounded-xl p-6 max-h-[300px] overflow-y-auto border border-blue-100 dark:border-blue-700/30">
-            <MarkdownRenderer content={latestNote.content} isDarkMode={document.documentElement.classList.contains('dark')} />
+            <MarkdownRenderer content={latestNote.content} isDarkMode={isDarkMode} />
           </div>
 
           <div className="flex gap-3">
@@ -2136,7 +2151,7 @@ const TeacherNotes: React.FC<{
               </div>
             )}
 
-            <MarkdownRenderer content={enhancedNote} isDarkMode={document.documentElement.classList.contains('dark')} />
+            <MarkdownRenderer content={enhancedNote} isDarkMode={isDarkMode} />
           </div>
 
           {/* AI-Powered Correction Prompt */}
@@ -2279,7 +2294,7 @@ const TeacherNotes: React.FC<{
         <PresentationView
           content={enhancedNote}
           onClose={() => setIsPresenting(false)}
-          isDarkMode={document.documentElement.classList.contains('dark')}
+          isDarkMode={isDarkMode}
         />
       )}
     </div>
