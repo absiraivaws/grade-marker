@@ -937,6 +937,35 @@ const markdownToHtml = (markdown: string, isDarkMode: boolean = false): string =
 
   // 1. Masking Phase - Protect complex blocks from being broken by paragraph/inline logic
 
+  // Mask Reaction Blocks (Animated)
+  mask(/^[ \t]*(`{3,}|~{3,})reaction\s*[\r\n]+([\s\S]*?)[\r\n]+[ \t]*\1/gm, (_, fence, content) => {
+    // Split by operators (+, ->, =, →) while keeping delimiters
+    const parts = content.trim().split(/(\+|->|→|=)/g).map(s => s.trim()).filter(Boolean);
+
+    let reactionHtml = `<div class="reaction-wrapper flex flex-wrap items-center justify-center gap-4 my-8 p-6 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-200 dark:border-slate-700">`;
+
+    parts.forEach((part, index) => {
+      const isOperator = ['+', '->', '→', '='].includes(part);
+      const delay = index * 200; // Stagger animation
+
+      // Render content (try KaTeX for formulas, or plain text for operators)
+      let renderedPart = part;
+      if (!isOperator) {
+        try {
+          renderedPart = katex.renderToString(part, { displayMode: false, throwOnError: false });
+        } catch { } // Fallback to text
+      } else {
+        // Style operators
+        renderedPart = `<span class="text-2xl font-black text-slate-400 dark:text-slate-500">${part}</span>`;
+      }
+
+      reactionHtml += `<div class="reaction-part animate-fade-in-up" style="animation-delay: ${delay}ms;">${renderedPart}</div>`;
+    });
+
+    reactionHtml += `</div>`;
+    return reactionHtml;
+  });
+
   // Mask Mermaid (Support ``` and ~~~, and optional leading whitespace)
   mask(/^[ \t]*(`{3,}|~{3,})mermaid\s*[\r\n]+([\s\S]*?)[\r\n]+[ \t]*\1/gm, (_, fence, code) => {
     // Use unique ID to prevent conflicts
@@ -1149,6 +1178,127 @@ const MarkdownRenderer: React.FC<{ content: string; isDarkMode: boolean }> = ({ 
   />;
 };
 
+// --- Presentation Mode Component ---
+const PresentationView: React.FC<{
+  content: string;
+  onClose: () => void;
+  isDarkMode: boolean;
+}> = ({ content, onClose, isDarkMode }) => {
+  // Dynamically import framer-motion to avoid heavy bundle if not used
+  const [AnimatePresence, setAnimatePresence] = React.useState<any>(null);
+  const [motion, setMotion] = React.useState<any>(null);
+  const [currentSlide, setCurrentSlide] = React.useState(0);
+
+  // Load framer-motion on mount
+  React.useEffect(() => {
+    import('framer-motion').then(mod => {
+      // Handle both ES modules and CommonJS
+      const AnimatePresenceComponent = mod.AnimatePresence;
+      const motionComponent = mod.motion;
+
+      if (AnimatePresenceComponent && motionComponent) {
+        setAnimatePresence(() => AnimatePresenceComponent);
+        setMotion(() => motionComponent);
+      } else {
+        console.error('Failed to load framer-motion components', mod);
+      }
+    }).catch(err => console.error('Failed to load framer-motion', err));
+  }, []);
+
+  // Split content into slides
+  const slides = React.useMemo(() => {
+    return content
+      .split(/^---$/m) // Split by horizontal rule
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+  }, [content]);
+
+  // Keyboard navigation
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight' || e.key === 'Space') {
+        setCurrentSlide(prev => Math.min(prev + 1, slides.length - 1));
+      } else if (e.key === 'ArrowLeft') {
+        setCurrentSlide(prev => Math.max(prev - 1, 0));
+      } else if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [slides.length, onClose]);
+
+  if (!motion || !AnimatePresence) {
+    return (
+      <div className="fixed inset-0 z-[60] bg-white dark:bg-slate-900 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
+
+  const SlideMotion = motion.div;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-white dark:bg-slate-900 flex flex-col">
+      {/* Toolbar */}
+      <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800">
+        <div className="flex items-center gap-4">
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
+            ✕ Close
+          </button>
+          <span className="text-sm font-mono text-slate-500">
+            Slide {currentSlide + 1} / {slides.length}
+          </span>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setCurrentSlide(prev => Math.max(prev - 1, 0))}
+            disabled={currentSlide === 0}
+            className="px-4 py-2 bg-slate-100 dark:bg-slate-800 rounded-lg disabled:opacity-50"
+          >
+            ← Prev
+          </button>
+          <button
+            onClick={() => setCurrentSlide(prev => Math.min(prev + 1, slides.length - 1))}
+            disabled={currentSlide === slides.length - 1}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg disabled:opacity-50"
+          >
+            Next →
+          </button>
+        </div>
+      </div>
+
+      {/* Slide Content */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden relative p-8 md:p-16 flex items-center justify-center">
+        <AnimatePresence mode="wait">
+          <SlideMotion
+            key={currentSlide}
+            initial={{ opacity: 0, x: 50 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -50 }}
+            transition={{ duration: 0.3 }}
+            className="w-full max-w-4xl min-h-[50vh]"
+          >
+            <div className="prose prose-xl dark:prose-invert max-w-none slide-content">
+              {/* Render current slide */}
+              <MarkdownRenderer content={slides[currentSlide]} isDarkMode={isDarkMode} />
+            </div>
+          </SlideMotion>
+        </AnimatePresence>
+      </div>
+
+      {/* Progress Bar */}
+      <div className="h-1 bg-slate-100 dark:bg-slate-800">
+        <div
+          className="h-full bg-indigo-600 transition-all duration-300"
+          style={{ width: `${((currentSlide + 1) / slides.length) * 100}%` }}
+        />
+      </div>
+    </div>
+  );
+};
+
+
 const TeacherNotes: React.FC<{
   teacher: Teacher | null;
   teacherId: string;
@@ -1186,6 +1336,7 @@ const TeacherNotes: React.FC<{
   const [allModuleNotes, setAllModuleNotes] = useState<GeneratedNote[]>([]);
   const [expandedModules, setExpandedModules] = useState<{ [key: string]: boolean }>({});
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [isPresenting, setIsPresenting] = useState(false);
 
   // Initialize Mermaid
 
@@ -1630,6 +1781,40 @@ const TeacherNotes: React.FC<{
                         ✏️ Edit
                       </button>
                       <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEnhancedNote(note.content);
+                          setOriginalEnhancedNote(note.content); // Needed for correct displaying
+                          setModuleTitle(note.moduleTitle);
+                          setIsPresenting(true);
+                        }}
+                        className="px-3 py-1 rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-700 text-xs font-bold transition-all"
+                        title="Present Note"
+                      >
+                        📽️
+                      </button>
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (confirm('Are you sure you want to delete this note? This action cannot be undone.')) {
+                            try {
+                              await dbService.deleteGeneratedNote(adminId, note.id, note.groupId);
+                              setAllModuleNotes(prev => prev.filter(n => n.id !== note.id));
+                              // Also clear if it's the currently viewed latest note
+                              if (latestNote?.id === note.id) {
+                                setLatestNote(null);
+                              }
+                            } catch (err) {
+                              alert('Failed to delete note');
+                            }
+                          }
+                        }}
+                        className="px-3 py-1 rounded-lg bg-red-100 hover:bg-red-200 text-red-600 text-xs font-bold transition-all"
+                        title="Delete Note"
+                      >
+                        🗑️
+                      </button>
+                      <button
                         onClick={() => setExpandedModules(prev => ({ ...prev, [note.id]: !prev[note.id] }))}
                         className="text-2xl transition-transform"
                         style={{ transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
@@ -1900,13 +2085,22 @@ const TeacherNotes: React.FC<{
               <h3 className="text-2xl font-black">📖 Enhanced Study Note</h3>
               <p className="text-sm text-slate-500 mt-1">Review and edit. Changes will help AI improve future notes.</p>
             </div>
-            <button
-              onClick={downloadAsPDF}
-              className="px-6 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black shadow-lg shadow-blue-100 dark:shadow-none transition-all active:scale-95"
-              title="Download as PDF"
-            >
-              📥 Download PDF
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setIsPresenting(true)}
+                className="px-6 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-black shadow-lg shadow-indigo-100 dark:shadow-none transition-all active:scale-95"
+                title="Start Presentation"
+              >
+                📽️ Present
+              </button>
+              <button
+                onClick={downloadAsPDF}
+                className="px-6 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black shadow-lg shadow-blue-100 dark:shadow-none transition-all active:scale-95"
+                title="Download as PDF"
+              >
+                📥 Download PDF
+              </button>
+            </div>
           </div>
 
           {/* Module Title Input */}
@@ -2079,6 +2273,14 @@ const TeacherNotes: React.FC<{
             Close History
           </button>
         </div>
+      )}
+      {/* Presentation Mode Overlay */}
+      {isPresenting && enhancedNote && (
+        <PresentationView
+          content={enhancedNote}
+          onClose={() => setIsPresenting(false)}
+          isDarkMode={document.documentElement.classList.contains('dark')}
+        />
       )}
     </div>
   );

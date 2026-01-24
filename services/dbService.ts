@@ -394,6 +394,25 @@ export const dbService = {
     return docRef.id;
   },
 
+  async deleteGeneratedNote(adminId: string, noteId: string, groupId?: string) {
+    // 1. Delete the specific note document
+    await deleteDoc(doc(getNestedColl(adminId, 'generatedNotes'), noteId));
+
+    // 2. If a groupId provided, we might want to clean up all related notes (simple version: delete all in group)
+    // The user requirement "delete notes" usually implies deleting the 'item' from the list.
+    // If we only delete the latest, the old versions might pop up if we don't handle it.
+    // Let's query and delete ALL notes in this group to be safe and clean.
+    if (groupId) {
+      const q = query(
+        getNestedColl(adminId, 'generatedNotes'),
+        where('groupId', '==', groupId)
+      );
+      const snap = await getDocs(q);
+      const deletePromises = snap.docs.map(d => deleteDoc(d.ref));
+      await Promise.all(deletePromises);
+    }
+  },
+
   async getLatestNote(adminId: string, subjectId: string, classId: string): Promise<GeneratedNote | null> {
     const q = query(
       getNestedColl(adminId, 'generatedNotes'),

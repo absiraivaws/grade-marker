@@ -229,6 +229,11 @@ export const createEnhancedNote = async (
 You are an expert teacher and curriculum designer.
 Your task: Deeply analyze the provided teaching materials and create a comprehensive, well-structured study note for students.
 
+CRITICAL FORMATTING FOR PRESENTATION MODE:
+- Use horizontal rules ('---') to separate distinct logical sections or "slides". 
+- Each section between '---' should be a self-contained "slide" or topic.
+- Ensure the first header of a section acts as the slide title.
+
 Context:
 Subject: ${context.subjectName}
 Class: ${context.className}
@@ -243,7 +248,15 @@ ${JSON.stringify(PACKAGES_DATA.map(p => `- ${p["Tool / Package"]} (${p.Subject |
 
 CRITICAL INSTRUCTIONS FOR VISUAL ELEMENTS:
 
-1. FORMULAS & EQUATIONS - Use LaTeX syntax:
+1. ANIMATED REACTIONS - Use the 'reaction' code block for step-by-step equations:
+   - Use for chemical equations, math steps, or logical flows.
+   - Use standard operators: +, ->, =, arrows.
+   - Format:
+   \`\`\`reaction
+   HCl + NaOH -> NaCl + H2O
+   \`\`\`
+
+2. FORMULAS & EQUATIONS - Use LaTeX syntax for static math:
    
    BLOCK FORMULAS (display mode) - wrap in $$...$$:
    $$x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$
@@ -470,11 +483,12 @@ Create a comprehensive, student-friendly study note with rich visual elements (e
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
     contents: {
+      role: 'user',
       parts: [
         { text: prompt },
         ...noteParts
-      ]
-    }
+      ] as any[]
+    } as any
   });
 
   return response.text || '';
