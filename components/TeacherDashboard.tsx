@@ -993,20 +993,27 @@ const markdownToHtml = (markdown: string, isDarkMode: boolean = false): string =
     return `<pre style="background: ${darkStyles.codeBlockBg}; color: ${darkStyles.codeBlockColor}; padding: 16px; border-radius: 12px; overflow-x: auto; margin: 20px 0; border: 1px solid ${darkStyles.tableBorder}; font-family: 'JetBrains Mono', monospace; font-size: 0.9em;"><code>${escapedCode}</code></pre>`;
   });
 
+  // Mask Inline LaTeX ($ ... $)
+  mask(/\$([^$\n]+?)\$/g, (match, latex) => {
+    try {
+      return katex.renderToString(latex.trim(), { displayMode: false, throwOnError: false, trust: true });
+    } catch (e) {
+      return match;
+    }
+  });
+
   // 2. Transformation Phase - Standard Markdown
   html = html
     // Headers
     .replace(/^# (.*?)$/gm, `<h1 style="font-size: 2.25em; font-weight: 900; margin: 32px 0 16px; color: ${darkStyles.headingColor}; letter-spacing: -0.02em;">$1</h1>`)
     .replace(/^## (.*?)$/gm, `<h2 style="font-size: 1.75em; font-weight: 800; margin: 28px 0 14px; color: ${darkStyles.headingColor}; letter-spacing: -0.01em; border-bottom: 2px solid ${isDarkMode ? '#374151' : '#f1f5f9'}; padding-bottom: 8px;">$1</h2>`)
     .replace(/^### (.*?)$/gm, `<h3 style="font-size: 1.35em; font-weight: 700; margin: 24px 0 12px; color: ${darkStyles.headingColor};">$1</h3>`)
+    .replace(/^#### (.*?)$/gm, `<h4 style="font-size: 1.2em; font-weight: 700; margin: 20px 0 10px; color: ${darkStyles.headingColor};">$1</h4>`)
+    .replace(/^##### (.*?)$/gm, `<h5 style="font-size: 1.1em; font-weight: 700; margin: 16px 0 8px; color: ${darkStyles.headingColor};">$1</h5>`)
+    .replace(/^###### (.*?)$/gm, `<h6 style="font-size: 1em; font-weight: 700; margin: 16px 0 8px; color: ${darkStyles.headingColor}; text-transform: uppercase;">$1</h6>`)
     // Bold/Italic
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.*?)\*/g, '<em>$1</em>')
-    // Inline LaTeX
-    .replace(/\$([^$\n]+?)\$/g, (match, latex) => {
-      try { return katex.renderToString(latex.trim(), { displayMode: false, throwOnError: false, trust: true }); }
-      catch (e) { return match; }
-    })
     // Inline Code
     .replace(/`(.*?)`/g, (_, code) => `<code style="background: ${darkStyles.inlineCodeBg}; color: ${darkStyles.inlineCodeColor}; padding: 2px 6px; border-radius: 6px; font-family: monospace; font-size: 0.9em;">${escapeHtml(code)}</code>`)
     // Blockquotes

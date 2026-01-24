@@ -1,6 +1,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { Assignment, AIResponse } from "../types";
+import { PACKAGES_DATA } from "./packagesData";
 
 const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
@@ -235,6 +236,10 @@ ${teacherPrompt ? `Teacher's Focus/Unit: ${teacherPrompt}` : ''}
 ${previousCorrections ? `Previous Teacher Feedback on Similar Notes:\n${previousCorrections}` : ''}
 ${extractedText ? `\n\nExtracted Text Content:\n${extractedText.substring(0, 50000)}` : ''}
 ${pageImages ? `\n\nAvailable page images: ${pageImages.map(p => `Page ${p.pageNumber}`).join(', ')}` : ''}
+
+AVAILABLE TOOLS & PACKAGES:
+The following tools are known to the system. You may reference them or use their syntax where applicable (specifically KaTeX for math and Mermaid for diagrams). For other specialized needs (Chemistry, Physics), mention the recommended tool if relevant, but use text descriptions or Mermaid if possible.
+${JSON.stringify(PACKAGES_DATA.map(p => `- ${p["Tool / Package"]} (${p.Subject || 'General'}): ${p["Type / Description"]}`), null, 2)}
 
 CRITICAL INSTRUCTIONS FOR VISUAL ELEMENTS:
 

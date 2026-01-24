@@ -33,6 +33,63 @@
         select {
           @apply bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-200 border-slate-200 dark:border-slate-600;
         }
+
+        /* --- Content Animations --- */
+        @keyframes fadeInUp {
+          from { opacity: 0; transform: translateY(20px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes scaleIn {
+          from { opacity: 0; transform: scale(0.95); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        @keyframes trackingExpand {
+          from { opacity: 0; letter-spacing: -0.5em; }
+          to { opacity: 1; letter-spacing: normal; }
+        }
+
+        .animate-fade-in-up {
+          animation: fadeInUp 0.6s ease-out forwards;
+        }
+        .animate-scale-in {
+          animation: scaleIn 0.5s ease-out forwards;
+        }
+        .animate-tracking-expand {
+          animation: trackingExpand 0.7s cubic-bezier(0.215, 0.610, 0.355, 1.000) both;
+        }
+        
+        /* Staggered List Items (up to 20 items) */
+        .enhanced-note-content li {
+          opacity: 0;
+          animation: fadeInUp 0.5s ease forwards;
+        }
+        .enhanced-note-content li:nth-child(1) { animation-delay: 100ms; }
+        .enhanced-note-content li:nth-child(2) { animation-delay: 150ms; }
+        .enhanced-note-content li:nth-child(3) { animation-delay: 200ms; }
+        .enhanced-note-content li:nth-child(4) { animation-delay: 250ms; }
+        .enhanced-note-content li:nth-child(5) { animation-delay: 300ms; }
+        .enhanced-note-content li:nth-child(6) { animation-delay: 350ms; }
+        .enhanced-note-content li:nth-child(7) { animation-delay: 400ms; }
+        .enhanced-note-content li:nth-child(8) { animation-delay: 450ms; }
+        .enhanced-note-content li:nth-child(9) { animation-delay: 500ms; }
+        .enhanced-note-content li:nth-child(10) { animation-delay: 550ms; }
+        /* Add more if needed, or rely on base delay */
+        
+        .enhanced-note-content h1, 
+        .enhanced-note-content h2, 
+        .enhanced-note-content h3 {
+          animation: fadeInUp 0.6s ease-out backwards;
+        }
+        
+        .enhanced-note-content blockquote {
+          animation: scaleIn 0.5s ease-out backwards;
+          animation-delay: 200ms;
+        }
+        
+        .mermaid-wrapper {
+          animation: scaleIn 0.6s ease-out backwards;
+          animation-delay: 300ms;
+        }
       }
 
     </style>
