@@ -77,6 +77,7 @@ const StudentDashboard: React.FC<Props> = ({ studentId, adminId, classId }) => {
         feedback: grading.feedback,
         criteriaScores: scores,
         criteriasMet: grading.criteriasMet,
+        annotations: grading.annotations, // Save annotations
         gradedAt: Date.now()
       };
 
@@ -158,12 +159,39 @@ const StudentDashboard: React.FC<Props> = ({ studentId, adminId, classId }) => {
                     </div>
                     <div className="mb-6">
                       {sub.studentAnswerImages && sub.studentAnswerImages.length > 0 ? (
-                        <div className="rounded-3xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-black">
-                          <img
-                            src={sub.studentAnswerImages[0]}
-                            alt="Your Answer"
-                            className="w-full h-auto max-h-[400px] object-contain mx-auto"
-                          />
+                        <div className="rounded-3xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-black relative inline-block w-full">
+                          <div className="relative w-full h-auto">
+                            <img
+                              src={sub.studentAnswerImages[0]}
+                              alt="Your Answer"
+                              className="w-full h-auto max-h-[400px] object-contain mx-auto"
+                            />
+                            {/* AI Annotations */}
+                            {sub.annotations?.map((ann, i) => (
+                              <div
+                                key={i}
+                                className="absolute border-2 border-green-500 bg-green-500/20 rounded-lg flex items-center justify-center group pointer-events-none"
+                                style={{
+                                  top: `${ann.box_2d[0] / 10}%`,
+                                  left: `${ann.box_2d[1] / 10}%`,
+                                  height: `${(ann.box_2d[2] - ann.box_2d[0]) / 10}%`,
+                                  width: `${(ann.box_2d[3] - ann.box_2d[1]) / 10}%`,
+                                }}
+                              >
+                                {/* Hover Label */}
+                                <div className="absolute -top-8 left-0 bg-black/80 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap z-20 transition-opacity pointer-events-none">
+                                  {ann.label}
+                                </div>
+
+                                {/* Score Badge */}
+                                {ann.score !== undefined && (
+                                  <div className="absolute -top-3 -right-3 w-6 h-6 bg-green-600 text-white text-xs font-black rounded-full flex items-center justify-center shadow-lg border border-white z-10">
+                                    +{ann.score}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       ) : (
                         <div className="bg-indigo-50/50 dark:bg-indigo-950/30 p-6 rounded-3xl border border-indigo-100 dark:border-indigo-900/40 italic text-indigo-800 dark:text-indigo-300 font-medium relative">

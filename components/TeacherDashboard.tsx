@@ -343,10 +343,18 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
         maxScore: aiResult.totalPossible,
         criteriaScores: aiResult.criteriasMet.map(met => met ? 1 : 0),
         criteriasMet: aiResult.criteriasMet,
+        annotations: aiResult.annotations, // Save Annotations
         gradedAt: Date.now()
       };
 
       await dbService.saveSubmission(adminId, submission);
+
+      // Update local state immediately (Optimistic/Confirmed Update)
+      setSubmissions(prev => {
+        // Remove existing if replacing (e.g. re-grade), otherwise add
+        const filtered = prev.filter(s => s.id !== submission.id);
+        return [submission, ...filtered];
+      });
 
       // Success
       setProcessingQueue(prev => prev.map(i => i.id === queueId ? { ...i, status: 'success' } : i));
@@ -3007,13 +3015,40 @@ const TeacherGradebook: React.FC<{
                             </div>
                             {selectedSubmission.studentAnswerImages && selectedSubmission.studentAnswerImages.length > 0 ? (
                               <div className="mt-6">
-                                <h5 className="text-sm font-black uppercase tracking-widest text-slate-400 mb-3">Student Answer</h5>
-                                <div className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-black">
-                                  <img
-                                    src={selectedSubmission.studentAnswerImages[0]}
-                                    alt="Student Answer"
-                                    className="w-full h-auto max-h-[500px] object-contain mx-auto"
-                                  />
+                                <h5 className="text-sm font-black uppercase tracking-widest text-slate-400 mb-3">Student Answer with AI Marks</h5>
+                                <div className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-black relative inline-block w-full">
+                                  <div className="relative w-full h-auto"> {/* Wrapper for positioning */}
+                                    <img
+                                      src={selectedSubmission.studentAnswerImages[0]}
+                                      alt="Student Answer"
+                                      className="w-full h-auto max-h-[600px] object-contain mx-auto"
+                                    />
+                                    {/* AI Annotations */}
+                                    {selectedSubmission.annotations?.map((ann, i) => (
+                                      <div
+                                        key={i}
+                                        className="absolute border-2 border-green-500 bg-green-500/20 rounded-lg flex items-center justify-center group pointer-events-none"
+                                        style={{
+                                          top: `${ann.box_2d[0] / 10}%`,
+                                          left: `${ann.box_2d[1] / 10}%`,
+                                          height: `${(ann.box_2d[2] - ann.box_2d[0]) / 10}%`,
+                                          width: `${(ann.box_2d[3] - ann.box_2d[1]) / 10}%`,
+                                        }}
+                                      >
+                                        {/* Hover Label */}
+                                        <div className="absolute -top-8 left-0 bg-black/80 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap z-20 transition-opacity pointer-events-none">
+                                          {ann.label}
+                                        </div>
+
+                                        {/* Score Badge */}
+                                        {ann.score !== undefined && (
+                                          <div className="absolute -top-3 -right-3 w-6 h-6 bg-green-600 text-white text-xs font-black rounded-full flex items-center justify-center shadow-lg border border-white z-10">
+                                            +{ann.score}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
                                 </div>
                               </div>
                             ) : (

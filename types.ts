@@ -78,6 +78,12 @@ export interface Assignment {
   status: 'DRAFT' | 'PUBLISHED';
 }
 
+export interface Annotation {
+  label: string;
+  score?: number; // Added score field
+  box_2d: number[]; // [ymin, xmin, ymax, xmax] normalized 0-1000
+}
+
 export interface Submission {
   id: string;
   assignmentId: string;
@@ -90,6 +96,7 @@ export interface Submission {
   maxScore: number;
   criteriaScores?: number[];
   criteriasMet?: boolean[];
+  annotations?: Annotation[];
   gradedAt?: number;
 }
 
@@ -98,6 +105,7 @@ export interface AIResponse {
   totalPossible: number;
   feedback: string;
   criteriasMet: boolean[];
+  annotations?: Annotation[];
 }
 
 export interface GeneratedNote {

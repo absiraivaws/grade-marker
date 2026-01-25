@@ -23,16 +23,23 @@ export const analyzeAnswer = async (
   const prompt = `
     You are a professional academic grader with expertise in STEM.
     
-    Task: Grade the Student's Answer (which may consist of multiple files/images provided in order) against the Marking Criteria based on the Teacher's Reference (also potentially multiple files/images).
+    Task: Grade the Student's Answer (which may consist of multiple files/images provided in order) against the Marking Criteria based on the Teacher's Reference.
     
     Marking Criteria:
     ${markingCriteriaString}
 
     STRICT GRADING RULES:
-    1. SEQUENTIAL REVIEW: The files provided for both student and teacher are in logical order. Review them as a continuous piece of work.
-    2. EXPLICIT FORMULA REQUIREMENT: If a marking point asks for "Stating the formula", the student MUST write the symbolic formula explicitly.
-    3. SUBSTITUTION vs FORMULA: Correct numerical substitution DOES NOT satisfy a requirement to state the formula itself.
-    4. ACCURACY: Check signs (+/-) and units carefully.
+    1. SEQUENTIAL REVIEW: The files provided for both student and teacher are in logical order.
+    2. EXPLICIT FORMULA REQUIREMENT: If a marking point asks for "Stating the formula", the student MUST write it explicitly.
+    3. ACCURACY: Check signs (+/-) and units.
+    4. ANNOTATION: Identifying correct parts.
+       - For each marking point awarded, Identify the VISUAL REGION in the student's image that proves it.
+       - Return a bounding box [ymin, xmin, ymax, xmax] for that region (normalized 0-1000 scale).
+       - Label it with the marking point description or ID.
+       - ASSIGN POINTS: Indicate how many marks were awarded for this specific part (e.g. 1, 2, 0.5).
+       - If multiple pages, assume coordinates relative to the page containing the evidence (if possible, but currently we treat as one continuous stream, so do your best to localize).
+       - If evidence is missing, do not annotate.
+    
     5. JSON FORMAT: Output must be valid JSON matching the schema.
   `;
 
@@ -73,6 +80,21 @@ export const analyzeAnswer = async (
           criteriasMet: {
             type: Type.ARRAY,
             items: { type: Type.BOOLEAN }
+          },
+          annotations: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                label: { type: Type.STRING },
+                score: { type: Type.NUMBER },
+                box_2d: {
+                  type: Type.ARRAY,
+                  items: { type: Type.NUMBER }
+                }
+              },
+              required: ["label", "box_2d"]
+            }
           }
         },
         required: ["score", "totalPossible", "feedback", "criteriasMet"]
