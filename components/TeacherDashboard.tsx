@@ -31,6 +31,9 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
   const [question, setQuestion] = useState('');
   const [referenceImages, setReferenceImages] = useState<File[]>([]);
   const [referenceImageUrls, setReferenceImageUrls] = useState<string[]>([]);
+  // New States for Due Date
+  const [dueDate, setDueDate] = useState<string>(''); // ISO String from input
+  const [allowLate, setAllowLate] = useState<boolean>(true);
   const [criteria, setCriteria] = useState<MarkingCriterion[]>([]);
   const [isExtracting, setIsExtracting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -206,6 +209,9 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
         teacherAnswerImagesBase64: referenceImageUrls, // Base64 for Gemini
         markingPoints: criteria,
         createdAt: Date.now(),
+        // Save Due Date
+        dueDate: dueDate ? new Date(dueDate).getTime() : undefined,
+        allowLateSubmissions: allowLate,
         gradeId: 'extracted-from-class',
         classId: selectedClassId,
         subjectId: selectedSubjectId,
@@ -216,7 +222,8 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
       await dbService.saveAssignment(adminId, newA);
       setAssignments(prev => [newA, ...prev]);
       setShowAdd(false);
-      setTitle(''); setQuestion(''); setCriteria([]); setReferenceImages([]); setReferenceImageUrls([]);
+      // Reset Form
+      setTitle(''); setQuestion(''); setCriteria([]); setReferenceImages([]); setReferenceImageUrls([]); setDueDate(''); setAllowLate(true);
       alert(status === 'DRAFT' ? 'Draft saved!' : 'Assignment published!');
     } catch (err: any) {
       console.error(err);
@@ -760,6 +767,30 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
                 <div className="space-y-2">
                   <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Assignment Title</label>
                   <input className="input-style" placeholder="Ex: Physics Mid-term" value={title} onChange={e => setTitle(e.target.value)} />
+                </div>
+
+                <div className="flex gap-4">
+                  <div className="space-y-2 flex-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Due Date (Optional)</label>
+                    <input
+                      type="datetime-local"
+                      className="input-style w-full"
+                      value={dueDate}
+                      onChange={e => setDueDate(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2 flex-1 flex flex-col justify-end pb-3">
+                    <label className="flex items-center gap-3 cursor-pointer group">
+                      <input
+                        type="checkbox"
+                        checked={allowLate}
+                        onChange={e => setAllowLate(e.target.checked)}
+                        className="w-5 h-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 transition-all"
+                      />
+                      <span className="text-sm font-bold text-slate-600 dark:text-slate-300 group-hover:text-indigo-600 transition-colors">Allow Late Submissions</span>
+                    </label>
+                    <p className="text-[10px] text-slate-400 pl-8">If disabled, students strictly cannot submit after deadline.</p>
+                  </div>
                 </div>
 
                 <div className="space-y-2">
@@ -2998,12 +3029,30 @@ const TeacherGradebook: React.FC<{
 
                       {selectedSubmission && (
                         <div className="space-y-6">
-                          <div className="bg-slate-50 dark:bg-slate-700/60 rounded-3xl p-6 border border-slate-100 dark:border-slate-700">
-                            <div className="flex flex-wrap items-center justify-between gap-4">
+                          <div className="lg:col-span-2 bg-slate-50 dark:bg-slate-900/50 rounded-3xl p-8 border border-slate-200 dark:border-slate-800">
+                            <div className="flex justify-between items-start mb-6">
                               <div>
-                                <h4 className="text-2xl font-black text-slate-800 dark:text-white">{selectedSubmission.studentName || selectedSubmission.studentId}</h4>
-                                <p className="text-xs font-bold uppercase tracking-widest text-slate-400">
-                                  {selectedSubmission.gradedAt ? `Graded ${new Date(selectedSubmission.gradedAt).toLocaleDateString()}` : 'Not graded yet'}
+                                <h3 className="text-2xl font-black text-slate-800 dark:text-white">{selectedSubmission.studentName}</h3>
+                                <p className="text-slate-500 font-bold text-xs uppercase tracking-widest mt-1">
+                                  {new Date(selectedSubmission.gradedAt || 0).toLocaleString()}
+                                  {assignment.dueDate && (
+                                    (() => {
+                                      const graded = selectedSubmission.gradedAt || 0;
+                                      const diff = assignment.dueDate - graded;
+                                      const absK = Math.abs(diff);
+                                      const days = Math.floor(absK / 86400000);
+                                      const hours = Math.floor((absK % 86400000) / 3600000);
+                                      const mins = Math.floor((absK % 3600000) / 60000);
+
+                                      let str = "";
+                                      if (days > 0) str += `${days}d `;
+                                      if (hours > 0) str += `${hours}h `;
+                                      str += `${mins}m `;
+
+                                      if (diff < 0) return <span className="ml-2 text-red-500 bg-red-100 dark:bg-red-900/40 px-2 py-0.5 rounded">{str} late</span>;
+                                      return <span className="ml-2 text-emerald-600 bg-emerald-100 dark:bg-emerald-900/40 px-2 py-0.5 rounded">{str} early</span>;
+                                    })()
+                                  )}
                                 </p>
                               </div>
                               <div className="text-right">
@@ -3123,8 +3172,15 @@ const AssignmentCard: React.FC<{ assignment: Assignment, onClick: () => void, is
 
     <h3 className="text-xl font-bold mb-2 group-hover:text-indigo-600 transition-colors line-clamp-1">{assignment.title}</h3>
     <p className="text-slate-500 text-sm line-clamp-3 mb-6 leading-relaxed">{assignment.question}</p>
-    <div className="pt-6 border-t border-slate-100 dark:border-slate-700 flex items-center justify-between text-xs font-bold text-slate-400">
-      <span>{new Date(assignment.createdAt).toLocaleDateString()}</span>
+    <div className="pt-6 border-t border-slate-100 dark:border-slate-700 flex flex-col gap-2 text-xs font-bold text-slate-400">
+      <div className="flex justify-between items-center w-full">
+        <span>{new Date(assignment.createdAt).toLocaleDateString()}</span>
+        {assignment.dueDate && (
+          <span className={`px-2 py-1 rounded bg-slate-100 dark:bg-slate-700/50 ${Date.now() > assignment.dueDate ? 'text-red-500' : 'text-slate-500'}`}>
+            Due: {new Date(assignment.dueDate).toLocaleString()}
+          </span>
+        )}
+      </div>
       <span className={`px-3 py-1 rounded-full text-[10px] ${isDraft ? 'bg-slate-200 text-slate-600' : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600'}`}>
         {isDraft ? 'DRAFT' : 'View Details'}
       </span>

@@ -65,6 +65,9 @@ const StudentDashboard: React.FC<Props> = ({ studentId, adminId, classId }) => {
       const grading = await analyzeAnswer(selectedAssignment, imageUrls);
       const scores = grading.criteriasMet.map((met, idx) => met ? (selectedAssignment.markingPoints[idx]?.weight || 0) : 0);
 
+      const isOverdue = selectedAssignment.dueDate && Date.now() > selectedAssignment.dueDate;
+      const isLate = !!(isOverdue && !selectedAssignment.treatLateAsNormal);
+
       const newSub: Submission = {
         id: Date.now().toString(),
         assignmentId: selectedAssignment.id,
@@ -78,7 +81,8 @@ const StudentDashboard: React.FC<Props> = ({ studentId, adminId, classId }) => {
         criteriaScores: scores,
         criteriasMet: grading.criteriasMet,
         annotations: grading.annotations, // Save annotations
-        gradedAt: Date.now()
+        gradedAt: Date.now(),
+        isLate
       };
 
       // Save to Firestore
@@ -118,16 +122,62 @@ const StudentDashboard: React.FC<Props> = ({ studentId, adminId, classId }) => {
               <p className="text-slate-500 font-medium">Finish your assignments to see AI feedback</p>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-              {pending.map(a => (
-                <div key={a.id} className="bg-white dark:bg-slate-800 rounded-[2rem] border border-slate-200 dark:border-slate-700 p-8 shadow-sm flex flex-col transition-all hover:shadow-xl hover:border-indigo-400 group hover:-translate-y-1">
-                  <div className="w-14 h-14 bg-indigo-50 dark:bg-indigo-950/40 rounded-2xl flex items-center justify-center text-indigo-600 dark:text-indigo-400 text-2xl mb-6 group-hover:scale-110 transition-transform">📝</div>
-                  <h3 className="text-xl font-bold mb-3 group-hover:text-indigo-600 transition-colors line-clamp-1">{a.title}</h3>
-                  <p className="text-slate-500 text-sm mb-8 flex-1 leading-relaxed line-clamp-4">{a.question}</p>
-                  <button onClick={() => setSelectedAssignment(a)} className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl transition-all shadow-lg shadow-indigo-100 dark:shadow-none active:scale-95">
-                    Start Submission
-                  </button>
-                </div>
-              ))}
+              {pending.map(a => {
+                const isOverdue = a.dueDate && Date.now() > a.dueDate;
+                const isClosed = isOverdue && !a.allowLateSubmissions && !a.treatLateAsNormal;
+                const isLate = isOverdue && !a.treatLateAsNormal;
+
+                // Simple Relative Time Logic (Refresh every render is okay for now, or use a hook for seconds)
+                const getRelativeTime = (due: number) => {
+                  const diff = due - Date.now();
+                  const absDiff = Math.abs(diff);
+                  const days = Math.floor(absDiff / (1000 * 60 * 60 * 24));
+                  const hours = Math.floor((absDiff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                  const minutes = Math.floor((absDiff % (1000 * 60 * 60)) / (1000 * 60));
+                  const seconds = Math.floor((absDiff % (1000 * 60)) / 1000);
+
+                  let timeStr = "";
+                  if (days > 0) timeStr += `${days}d `;
+                  if (hours > 0) timeStr += `${hours}h `;
+                  if (minutes > 0) timeStr += `${minutes}m `;
+                  if (days === 0 && hours === 0) timeStr += `${seconds}s `; // Show seconds if close
+
+                  if (diff > 0) return { text: `${timeStr}remaining`, color: 'text-emerald-600 dark:text-emerald-400' };
+                  return { text: `${timeStr}late`, color: 'text-red-600 dark:text-red-400' };
+                };
+
+                const timeStatus = a.dueDate ? getRelativeTime(a.dueDate) : null;
+
+                return (
+                  <div key={a.id} className={`bg-white dark:bg-slate-800 rounded-[2rem] border ${isClosed ? 'border-red-200 dark:border-red-900/50 opacity-75' : 'border-slate-200 dark:border-slate-700'} p-8 shadow-sm flex flex-col transition-all hover:shadow-xl hover:border-indigo-400 group hover:-translate-y-1 relative overflow-hidden`}>
+                    {isLate && !isClosed && <div className="absolute top-0 right-0 bg-orange-100 text-orange-600 px-4 py-1 rounded-bl-xl text-[10px] font-black uppercase tracking-widest">Late Submission</div>}
+                    {isClosed && <div className="absolute top-0 right-0 bg-red-100 text-red-600 px-4 py-1 rounded-bl-xl text-[10px] font-black uppercase tracking-widest">Closed</div>}
+
+                    <div className="w-14 h-14 bg-indigo-50 dark:bg-indigo-950/40 rounded-2xl flex items-center justify-center text-indigo-600 dark:text-indigo-400 text-2xl mb-6 group-hover:scale-110 transition-transform">📝</div>
+                    <h3 className="text-xl font-bold mb-1 group-hover:text-indigo-600 transition-colors line-clamp-1">{a.title}</h3>
+
+                    {a.dueDate && (
+                      <div className="mb-3 text-xs font-bold flex flex-wrap items-center justify-between gap-2">
+                        <span className={`${isOverdue ? 'text-red-500' : 'text-slate-400'}`}>Due: {new Date(a.dueDate).toLocaleString()}</span>
+                        {timeStatus && (
+                          <span className={`${timeStatus.color} uppercase tracking-wider text-[10px] bg-slate-50 dark:bg-slate-700/50 px-2 py-1 rounded`}>
+                            {timeStatus.text}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    <p className="text-slate-500 text-sm mb-8 flex-1 leading-relaxed line-clamp-4">{a.question}</p>
+                    <button
+                      onClick={() => setSelectedAssignment(a)}
+                      disabled={isClosed}
+                      className={`w-full py-4 ${isClosed ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-100 dark:shadow-none active:scale-95'} font-bold rounded-2xl transition-all`}
+                    >
+                      {isClosed ? 'Submission Closed' : 'Start Submission'}
+                    </button>
+                  </div>
+                )
+              })}
               {pending.length === 0 && (
                 <div className="col-span-full py-20 bg-emerald-50/50 dark:bg-emerald-950/20 border-2 border-dashed border-emerald-100 dark:border-emerald-900 rounded-[2rem] text-center animate-in zoom-in-95 duration-500">
                   <div className="text-5xl mb-4">🎉</div>
@@ -151,7 +201,27 @@ const StudentDashboard: React.FC<Props> = ({ studentId, adminId, classId }) => {
                     <div className="flex justify-between items-start mb-6">
                       <div>
                         <h3 className="text-2xl font-black mb-1 line-clamp-1">{a.title}</h3>
-                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Submitted {new Date(sub.gradedAt || 0).toLocaleDateString()}</p>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                          Submitted {new Date(sub.gradedAt || 0).toLocaleDateString()}
+                          {a.dueDate && (
+                            (() => {
+                              const graded = sub.gradedAt || 0;
+                              const diff = a.dueDate - graded;
+                              const absK = Math.abs(diff);
+                              const days = Math.floor(absK / 86400000);
+                              const hours = Math.floor((absK % 86400000) / 3600000);
+                              const mins = Math.floor((absK % 3600000) / 60000);
+
+                              let str = "";
+                              if (days > 0) str += `${days}d `;
+                              if (hours > 0) str += `${hours}h `;
+                              str += `${mins}m `;
+
+                              if (diff < 0) return <span className="ml-2 text-red-500 bg-red-50 dark:bg-red-900/40 px-2 py-0.5 rounded">{str} late</span>;
+                              return <span className="ml-2 text-emerald-600 bg-emerald-50 dark:bg-emerald-900/40 px-2 py-0.5 rounded">{str} earlier</span>;
+                            })()
+                          )}
+                        </p>
                       </div>
                       <div className="text-right">
                         <p className="text-4xl font-black text-indigo-600">{sub.score} <span className="text-sm opacity-40">/ {sub.maxScore}</span></p>

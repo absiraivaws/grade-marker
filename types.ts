@@ -75,6 +75,9 @@ export interface Assignment {
   teacherAnswerImagesBase64?: string[]; // Base64 for Gemini
   markingPoints: MarkingCriterion[];
   createdAt: number;
+  dueDate?: number; // New: Deadline
+  allowLateSubmissions?: boolean; // New: If flase, block after due date
+  treatLateAsNormal?: boolean; // New: If true, ignore due date (re-enabled mode)
   status: 'DRAFT' | 'PUBLISHED';
 }
 
@@ -98,6 +101,7 @@ export interface Submission {
   criteriasMet?: boolean[];
   annotations?: Annotation[];
   gradedAt?: number;
+  isLate?: boolean; // New: Submitted after due date
 }
 
 export interface AIResponse {
