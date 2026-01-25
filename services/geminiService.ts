@@ -256,7 +256,15 @@ CRITICAL INSTRUCTIONS FOR VISUAL ELEMENTS:
    HCl + NaOH -> NaCl + H2O
    \`\`\`
 
-2. FORMULAS & EQUATIONS - Use LaTeX syntax for static math:
+2. ORGANIC STRUCTURES - Use the 'smiles' code block for 2D molecules:
+   - Use for organic chemistry, isomers, or complex structures.
+   - Provide the standard SMILES string.
+   - Example:
+   \`\`\`smiles
+   CC(=O)O
+   \`\`\`
+
+3. FORMULAS & EQUATIONS - Use LaTeX syntax for static math:
    
    BLOCK FORMULAS (display mode) - wrap in $$...$$:
    $$x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$

@@ -966,6 +966,22 @@ const markdownToHtml = (markdown: string, isDarkMode: boolean = false): string =
     return reactionHtml;
   });
 
+  // Mask SMILES Blocks (2D Molecules)
+  mask(/^[ \t]*(`{3,}|~{3,})smiles\s*[\r\n]+([\s\S]*?)[\r\n]+[ \t]*\1/gm, (_, fence, content) => {
+    const smiles = content.trim();
+    // Generate a unique ID for this canvas
+    const id = `smiles-${Math.random().toString(36).substr(2, 9)}`;
+    // We defer the actual drawing to the React component or a separate effect,
+    // but here we just produce the container.
+    // However, since markdownToHtml is pure string manipulation, we need a way to trigger the drawing.
+    // We will use a script tag or a custom element that the useEffect can pick up? 
+    // BETTER: Use the same pattern as Mermaid -> Render a specific container and let useEffect find it.
+
+    return `<div class="smiles-wrapper flex justify-center my-6 p-4 bg-white dark:bg-white/5 rounded-2xl border border-slate-200 dark:border-slate-700/50" data-smiles="${smiles}" id="${id}">
+              <canvas id="canvas-${id}" width="400" height="300"></canvas>
+            </div>`;
+  });
+
   // Mask Mermaid (Support ``` and ~~~, and optional leading whitespace)
   mask(/^[ \t]*(`{3,}|~{3,})mermaid\s*[\r\n]+([\s\S]*?)[\r\n]+[ \t]*\1/gm, (_, fence, code) => {
     // Use unique ID to prevent conflicts
@@ -1166,7 +1182,80 @@ const MarkdownRenderer: React.FC<{ content: string; isDarkMode: boolean }> = ({ 
     };
 
     // Small delay to ensure DOM is painted and refs are populated
-    const timer = setTimeout(renderDiagrams, 100);
+    const timer = setTimeout(() => {
+      renderDiagrams();
+
+      // --- Process SMILES Diagrams ---
+      const smilesContainers = containerRef.current?.querySelectorAll('.smiles-wrapper');
+      smilesContainers?.forEach(wrapper => {
+        const el = wrapper as HTMLElement;
+        const id = el.id;
+        const smiles = el.getAttribute('data-smiles');
+        const canvasId = `canvas-${id}`;
+
+        if (!smiles) return;
+
+        // Dynamic import
+        import('smiles-drawer').then(SmilesDrawer => {
+          try {
+            const options = isDarkMode ? {
+              bondThickness: 0.6,
+              bondLength: 15,
+              shortBondLength: 0.8,
+              bondSpacing: 0.18,
+              atomVisualization: 'default',
+              isometric: true,
+              debug: false,
+              terminalCarbons: true,
+              explicitHydrogens: true,
+              overlapSensitivity: 0.42,
+              overlapResolutionIterations: 1,
+              compactDrawing: false,
+              fontSizeLarge: 5,
+              fontSizeSmall: 3,
+              padding: 2,
+              experimental: false,
+              themes: {
+                dark: {
+                  C: '#fff',
+                  O: '#e11d48',
+                  N: '#3b82f6',
+                  F: '#22c55e',
+                  CL: '#16a34a',
+                  BR: '#a855f7',
+                  I: '#a855f7',
+                  P: '#f97316',
+                  S: '#eab308',
+                  B: '#f59e0b',
+                  SI: '#f59e0b',
+                  H: '#fff',
+                  BACKGROUND: 'transparent'
+                }
+              }
+            } : {
+              terminalCarbons: true,
+              explicitHydrogens: true,
+              themes: {
+                light: {
+                  C: '#222',
+                  BACKGROUND: 'transparent'
+                }
+              }
+            };
+
+            const drawer = new SmilesDrawer.Drawer(options);
+
+            SmilesDrawer.parse(smiles, (tree: any) => {
+              drawer.draw(tree, canvasId, isDarkMode ? 'dark' : 'light', false);
+            }, (err: any) => {
+              console.error('SMILES Parse Error', err);
+            });
+          } catch (err) {
+            console.error('SMILES Draw Error', err);
+          }
+        }).catch(err => console.error('Failed to load SmilesDrawer', err));
+      });
+    }, 100);
     return () => clearTimeout(timer);
   }, [html, isDarkMode]);
 
