@@ -510,6 +510,63 @@ Be specific about what was changed and why it matters for future note generation
   return response.text || 'Teacher made corrections to improve clarity and accuracy.';
 };
 
+export const identifyStudentName = async (
+  imageBase64: string,
+  studentNames: string[]
+): Promise<{ studentName: string | null; confidence: string }> => {
+  const ai = getAI();
+
+  const prompt = `
+    You are an intelligent assistant helping a teacher sort assignment papers.
+    
+    Task: Identify the student name written on this paper.
+    
+    Context:
+    This paper belongs to one of the following students in the class:
+    ${JSON.stringify(studentNames)}
+    
+    Instructions:
+    1. Look at the handwritten name on the paper (usually at the top).
+    2. Match it to the closest name in the provided list.
+    3. If the name is clearly visible and matches a student (even with slight spelling diffs or "First Last" vs "First L."), return the exact name from the list.
+    4. If the name is ambiguous or not in the list, return "null".
+    
+    Output Format:
+    Return JSON ONLY:
+    { "studentName": "Exact Name From List" | null, "confidence": "High" | "Medium" | "Low" }
+  `;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: {
+      role: 'user',
+      parts: [
+        { text: prompt },
+        {
+          inlineData: {
+            mimeType: getMimeType(imageBase64),
+            data: imageBase64.split(',')[1]
+          }
+        }
+      ]
+    },
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          studentName: { type: Type.STRING, nullable: true },
+          confidence: { type: Type.STRING }
+        },
+        required: ["studentName", "confidence"]
+      }
+    }
+  });
+
+  const text = response.text || "{}";
+  return JSON.parse(text);
+};
+
 export const applyNoteCorrection = async (
   currentNoteContent: string,
   correctionPrompt: string,

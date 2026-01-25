@@ -2,16 +2,19 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { Assignment, Submission, MarkingCriterion, Teacher, Student, Subject, Class, NoteCorrection, GeneratedNote } from '../types';
-import { BookOpen, GraduationCap, Users, FileText, CheckCircle, Clock, ChevronRight, ChevronDown, Search, Filter, MoreVertical, Download, X, Image as ImageIcon, Crop as CropIcon } from 'lucide-react';
+import { BookOpen, GraduationCap, Users, FileText, CheckCircle, Clock, ChevronRight, ChevronDown, Search, Filter, MoreVertical, Download, X, Image as ImageIcon, Crop as CropIcon, Camera } from 'lucide-react';
 import { dbService } from '../services/dbService';
 import Cropper from 'react-easy-crop';
 import { getCroppedImg } from '../utils/cropImage';
 import { uploadBase64ToStorage } from '../services/pdfExtractor';
 import { extractMarkingPoints, analyzeTeachingNote, NoteSectionDraft, NoteAnalysisResult, createEnhancedNote, extractCorrectionSummary, applyNoteCorrection, extractModuleTitle } from '../services/geminiService';
 import { extractPDFContent, ExtractedImage } from '../services/pdfExtractor';
+import { WebcamScanner } from './WebcamScanner';
 import mermaid from 'mermaid';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
+import { identifyStudentName, analyzeAnswer } from '../services/geminiService';
+import { compressImage } from '../utils/imageUtils';
 
 const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ teacherId, adminId }) => {
   const [teacher, setTeacher] = useState<Teacher | null>(null);
@@ -38,6 +41,8 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
   const [classNames, setClassNames] = useState<{ [key: string]: string }>({});
   const [subjectNames, setSubjectNames] = useState<{ [key: string]: string }>({});
   const [classData, setClassData] = useState<{ [key: string]: Class }>({});
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanningAssignment, setScanningAssignment] = useState<Assignment | null>(null);
 
   // Load Teacher Profile & Names
   useEffect(() => {
@@ -225,8 +230,90 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
   const drafts = assignments.filter(a => a.status === 'DRAFT');
   const published = assignments.filter(a => a.status === 'PUBLISHED');
 
+  const handleScanStart = (assignment: Assignment) => {
+    setScanningAssignment(assignment);
+    setIsScanning(true);
+  };
+
+
+
+  const handleScanCapture = async (imageData: string) => {
+    if (!scanningAssignment) return;
+
+    try {
+      // 0. Compress Image to avoid "Failed to fetch" (payload too large)
+      const compressedImage = await compressImage(imageData);
+      console.log("Original size:", imageData.length, "Compressed size:", compressedImage.length);
+
+      // 1. Identify Student
+      const students = await dbService.getStudentsByClass(adminId, scanningAssignment.classId);
+      const studentNames = students.map(s => s.name);
+
+      const identification = await identifyStudentName(compressedImage, studentNames);
+
+      let matchedStudent = students.find(s => s.name === identification.studentName);
+
+      if (!matchedStudent) {
+        // Fallback or retry?
+        alert(`Could not automatically identify student (Confidence: ${identification.confidence}). Please check the name manually.`);
+        return;
+      }
+
+      const confirmed = window.confirm(`Identified Student: ${matchedStudent.name}\nConfidence: ${identification.confidence}\n\nProceed with grading?`);
+      if (!confirmed) return;
+
+      // 2. Upload Student Image (We use the compressed one to be faster)
+      const studentImgUrl = await uploadBase64ToStorage(compressedImage, teacherId, `scan_${matchedStudent.id}_${Date.now()}`);
+
+      // 3. Auto-Grade using Gemini
+      // Ensure we have teacher reference images. If base64 is missing, we might need to rely on URLs if supported,
+      // but analyzeAnswer expects base64 currently for "inlineData".
+      // If teacherAnswerImagesBase64 is empty, we warn.
+      if (!scanningAssignment.teacherAnswerImagesBase64 || scanningAssignment.teacherAnswerImagesBase64.length === 0) {
+        alert("Warning: This assignment doesn't have reference images loaded for AI. Grading might be less accurate.");
+      }
+
+      // Use compressed image for AI analysis too
+      const aiResult = await analyzeAnswer(scanningAssignment, [compressedImage]);
+
+      // 4. Save Submission
+      const submission: Submission = {
+        id: crypto.randomUUID(),
+        assignmentId: scanningAssignment.id,
+        studentId: matchedStudent.id,
+        studentName: matchedStudent.name,
+        studentAnswerImages: [studentImgUrl],
+        studentAnswerImagesBase64: [imageData],
+        feedback: aiResult.feedback,
+        score: aiResult.score,
+        maxScore: aiResult.totalPossible,
+        criteriaScores: aiResult.criteriasMet.map(met => met ? 1 : 0), // simplified
+        criteriasMet: aiResult.criteriasMet,
+        gradedAt: Date.now()
+      };
+
+      await dbService.saveSubmission(adminId, submission);
+
+      alert(`✅ Graded! Score: ${aiResult.score}/${aiResult.totalPossible}\nFeedback: ${aiResult.feedback}`);
+
+      // Refresh submissions list if needed
+      // setSubmissions... (optional, or just rely on next fetch)
+
+    } catch (err: any) {
+      console.error("Scan error:", err);
+      alert("Error during scanning/grading: " + err.message);
+    }
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
+      {/* Webcam Overlay */}
+      <WebcamScanner
+        isActive={isScanning}
+        onClose={() => setIsScanning(false)}
+        onCapture={handleScanCapture}
+      />
+
       <Routes>
         <Route path="/" element={<TeacherOverview teacher={teacher} assignments={assignments} submissions={submissions} />} />
 
@@ -247,7 +334,12 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
               <h3 className="text-xl font-bold text-slate-400 uppercase tracking-widest pl-2 border-l-4 border-indigo-500">Active Assignments</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {published.map(a => (
-                  <AssignmentCard key={a.id} assignment={a} onClick={() => setSelectedAssignment(a)} />
+                  <AssignmentCard
+                    key={a.id}
+                    assignment={a}
+                    onClick={() => setSelectedAssignment(a)}
+                    onScan={() => handleScanStart(a)}
+                  />
                 ))}
                 {published.length === 0 && (
                   <div className="col-span-full py-10 text-center text-slate-400 italic">No active assignments. Create one or publish a draft.</div>
@@ -2870,14 +2962,29 @@ const TeacherGradebook: React.FC<{
 
 export default TeacherDashboard;
 
-const AssignmentCard: React.FC<{ assignment: Assignment, onClick: () => void, isDraft?: boolean }> = ({ assignment, onClick, isDraft }) => (
+const AssignmentCard: React.FC<{ assignment: Assignment, onClick: () => void, isDraft?: boolean, onScan?: () => void }> = ({ assignment, onClick, isDraft, onScan }) => (
   <div
     onClick={onClick}
-    className={`group cursor-pointer bg-white dark:bg-slate-800 border ${isDraft ? 'border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/60' : 'border-slate-200 dark:border-slate-700'} rounded-3xl p-7 shadow-sm hover:shadow-xl hover:border-indigo-400 transition-all hover:-translate-y-1`}
+    className={`group cursor-pointer bg-white dark:bg-slate-800 border ${isDraft ? 'border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/60' : 'border-slate-200 dark:border-slate-700'} rounded-3xl p-7 shadow-sm hover:shadow-xl hover:border-indigo-400 transition-all hover:-translate-y-1 relative overflow-hidden`}
   >
-    <div className={`w-12 h-12 ${isDraft ? 'bg-slate-200 dark:bg-slate-700 text-slate-500' : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'} rounded-2xl flex items-center justify-center text-xl mb-4 group-hover:scale-110 transition-transform`}>
-      {isDraft ? '📝' : '📄'}
+    <div className="flex justify-between items-start mb-4">
+      <div className={`w-12 h-12 ${isDraft ? 'bg-slate-200 dark:bg-slate-700 text-slate-500' : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'} rounded-2xl flex items-center justify-center text-xl group-hover:scale-110 transition-transform`}>
+        {isDraft ? '📝' : '📄'}
+      </div>
+
+      {/* Scan Button */}
+      {!isDraft && onScan && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onScan(); }}
+          className="flex items-center gap-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 px-4 py-2 rounded-full font-bold text-xs transition-colors shadow-sm z-10"
+          title="Scan Submissions"
+        >
+          <Camera className="w-4 h-4" />
+          <span>SCAN SUBMISSIONS</span>
+        </button>
+      )}
     </div>
+
     <h3 className="text-xl font-bold mb-2 group-hover:text-indigo-600 transition-colors line-clamp-1">{assignment.title}</h3>
     <p className="text-slate-500 text-sm line-clamp-3 mb-6 leading-relaxed">{assignment.question}</p>
     <div className="pt-6 border-t border-slate-100 dark:border-slate-700 flex items-center justify-between text-xs font-bold text-slate-400">
