@@ -84,7 +84,9 @@ export interface Assignment {
 export interface Annotation {
   label: string;
   score?: number; // Added score field
-  box_2d: number[]; // [ymin, xmin, ymax, xmax] normalized 0-1000
+  box_2d: number[]; // [ymin, xmin, ymax, xmax] in 0-1000 scale
+  isManual?: boolean; // New: To distinguish from AI annotations
+  criterionIndex?: number; // New: Link to specific marking point
 }
 
 export interface Submission {
@@ -102,6 +104,8 @@ export interface Submission {
   annotations?: Annotation[];
   gradedAt?: number;
   isLate?: boolean; // New: Submitted after due date
+  isEdited?: boolean; // New: Manually edited by teacher
+  editedCriteria?: boolean[]; // New: Track which specific criteria were modified
 }
 
 export interface AIResponse {

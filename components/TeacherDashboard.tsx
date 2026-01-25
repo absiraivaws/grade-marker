@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { Assignment, Submission, MarkingCriterion, Teacher, Student, Subject, Class, NoteCorrection, GeneratedNote } from '../types';
+import { Assignment, Submission, MarkingCriterion, Teacher, Student, Subject, Class, NoteCorrection, GeneratedNote, Annotation } from '../types';
 import { BookOpen, GraduationCap, Users, FileText, CheckCircle, Clock, ChevronRight, ChevronDown, Search, Filter, MoreVertical, Download, X, Image as ImageIcon, Crop as CropIcon, Camera } from 'lucide-react';
 import { dbService } from '../services/dbService';
 import Cropper from 'react-easy-crop';
@@ -44,6 +44,14 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
   const [classNames, setClassNames] = useState<{ [key: string]: string }>({});
   const [subjectNames, setSubjectNames] = useState<{ [key: string]: string }>({});
   const [classData, setClassData] = useState<{ [key: string]: Class }>({});
+
+  // Toast Notification
+  const [notification, setNotification] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+
+  const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 3000);
+  };
 
 
   // Load Teacher Profile & Names
@@ -93,16 +101,25 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
       const myAssignments = await dbService.getTeacherAssignments(adminId, teacherId);
       setAssignments(myAssignments);
 
-      // Fetch all submissions for teacher's assignments
-      const allSubmissions: Submission[] = [];
-      for (const assignment of myAssignments) {
-        const assignmentSubs = await dbService.getSubmissionsByAssignment(adminId, assignment.id);
-        allSubmissions.push(...assignmentSubs);
-      }
-      setSubmissions(allSubmissions);
+      // Fetch Submissions
+      await refreshSubmissions(myAssignments);
     };
+
     fetchProfileAndNames();
   }, [teacherId, adminId]);
+
+  const refreshSubmissions = async (currentAssignments: Assignment[] = assignments) => {
+    const allSubmissions: Submission[] = [];
+    for (const assignment of currentAssignments) {
+      const assignmentSubs = await dbService.getSubmissionsByAssignment(adminId, assignment.id);
+      allSubmissions.push(...assignmentSubs);
+    }
+    setSubmissions(allSubmissions);
+  };
+
+  const updateLocalSubmission = (updatedSub: Submission) => {
+    setSubmissions(prev => prev.map(s => s.id === updatedSub.id ? updatedSub : s));
+  };
 
   useEffect(() => {
     if (selectedAssignment?.status === 'DRAFT') {
@@ -378,7 +395,14 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
   };
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
+    <div className="space-y-8 animate-in fade-in duration-500 relative">
+      {/* Toast Notification */}
+      {notification && (
+        <div className={`fixed top-4 left-1/2 transform -translate-x-1/2 z-[250] flex items-center gap-3 px-6 py-3 rounded-2xl shadow-2xl animate-in slide-in-from-top-4 duration-300 ${notification.type === 'success' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'}`}>
+          {notification.type === 'success' ? <CheckCircle className="w-5 h-5" /> : <X className="w-5 h-5" />}
+          <span className="font-bold">{notification.message}</span>
+        </div>
+      )}
       {/* Webcam Overlay */}
       <WebcamScanner
         isActive={isScanning}
@@ -469,6 +493,11 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
             submissions={submissions}
             classNames={classNames}
             subjectNames={subjectNames}
+            adminId={adminId}
+            onUpdateSubmission={updateLocalSubmission}
+            onRefresh={() => refreshSubmissions()}
+            onSuccess={(msg) => showNotification(msg, 'success')}
+            onError={(msg) => showNotification(msg, 'error')}
           />
         } />
 
@@ -2931,9 +2960,23 @@ const TeacherGradebook: React.FC<{
   submissions: Submission[];
   classNames: { [key: string]: string };
   subjectNames: { [key: string]: string };
-}> = ({ assignments, submissions, classNames, subjectNames }) => {
+  adminId: string;
+  onRefresh?: () => Promise<void>;
+  onSuccess?: (msg: string) => void;
+  onError?: (msg: string) => void;
+  onUpdateSubmission?: (sub: Submission) => void;
+}> = ({ assignments, submissions, classNames, subjectNames, adminId, onRefresh, onSuccess, onError, onUpdateSubmission }) => {
   const [expandedAssignments, setExpandedAssignments] = useState<{ [id: string]: boolean }>({});
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<string | null>(null);
+  const [editingSubmission, setEditingSubmission] = useState<Submission | null>(null); // New editing state
+
+  // Annotation Drawing State
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [drawStart, setDrawStart] = useState<{ x: number, y: number } | null>(null);
+  const [currentRect, setCurrentRect] = useState<{ x: number, y: number, w: number, h: number } | null>(null);
+  const [showAnnotationForm, setShowAnnotationForm] = useState(false);
+  const [annotationFormPos, setAnnotationFormPos] = useState<{ x: number, y: number } | null>(null);
+  const [tempBox, setTempBox] = useState<number[] | null>(null); // [ymin, xmin, ymax, xmax] 0-1000 scale
 
   const toggleAssignment = (assignmentId: string) => {
     setExpandedAssignments(prev => ({ ...prev, [assignmentId]: !prev[assignmentId] }));
@@ -3055,10 +3098,99 @@ const TeacherGradebook: React.FC<{
                                   )}
                                 </p>
                               </div>
-                              <div className="text-right">
+                              <div className="text-right flex flex-col items-end gap-2">
                                 <div className="text-3xl font-black text-indigo-600 dark:text-indigo-400">
-                                  {selectedSubmission.score ?? 0}/{selectedSubmission.maxScore ?? 0}
+                                  {editingSubmission && editingSubmission.id === selectedSubmission.id
+                                    ? editingSubmission.score
+                                    : selectedSubmission.score ?? 0}
+                                  /{selectedSubmission.maxScore ?? 0}
                                 </div>
+
+                                {/* Edit Controls */}
+                                {editingSubmission && editingSubmission.id === selectedSubmission.id ? (
+                                  <div className="flex gap-2 animate-in zoom-in">
+                                    <button
+                                      onClick={async () => {
+                                        if (!editingSubmission) return;
+
+                                        // Validation: Require duplicate Check or Manual Annotation
+                                        // "teacher must make an annotation to save edits"
+                                        const hasManualAnnotation = editingSubmission.annotations?.some(a => a.isManual);
+                                        if (!hasManualAnnotation) {
+                                          if (onError) onError("Please add an annotation (click on image) to verify your changes.");
+                                          else alert("Please add an annotation (click on image) to verify your changes.");
+                                          return;
+                                        }
+
+                                        // Save Logic
+                                        const prevEdited = selectedSubmission.editedCriteria || [];
+                                        const numCriteria = assignment.markingPoints.length;
+                                        // Ensure full length and no holes (Firestore rejects undefined/sparse)
+                                        const newEditedIndices = Array(numCriteria).fill(false).map((_, i) => prevEdited[i] ?? false);
+
+                                        // Mark newly changed criteria
+                                        if (editingSubmission.criteriaScores) {
+                                          assignment.markingPoints.forEach((_, idx) => {
+                                            const oldVal = selectedSubmission.criteriaScores?.[idx];
+                                            const newVal = editingSubmission.criteriaScores?.[idx];
+                                            if (oldVal !== newVal) {
+                                              newEditedIndices[idx] = true;
+                                            }
+                                          });
+                                        }
+
+                                        const finalSub = {
+                                          ...editingSubmission,
+                                          isEdited: true,
+                                          editedCriteria: newEditedIndices
+                                        };
+                                        try {
+                                          await dbService.saveSubmission(adminId, finalSub);
+
+                                          // Optimistic Update
+                                          if (onUpdateSubmission) {
+                                            onUpdateSubmission(finalSub);
+                                          }
+
+                                          // Show success immediately
+                                          if (onSuccess) onSuccess("Grade updated successfully!");
+
+                                          // Close edit mode
+                                          setEditingSubmission(null);
+
+                                          // Refresh in background
+                                          if (onRefresh) {
+                                            onRefresh().catch(console.error);
+                                          }
+                                        } catch (e: any) {
+                                          if (onError) onError("Failed to save grade: " + e.message);
+                                          else alert("Failed to save grade: " + e.message);
+                                          console.error(e);
+                                        }
+                                      }}
+                                      className="px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-xl font-bold text-xs shadow-lg shadow-green-200 dark:shadow-none"
+                                    >
+                                      Save Changes
+                                    </button>
+                                    <button
+                                      onClick={() => setEditingSubmission(null)}
+                                      className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-xl font-bold text-xs"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() => setEditingSubmission(selectedSubmission)}
+                                    className="px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-xl font-bold text-xs transition-colors"
+                                  >
+                                    Edit Grade ✏️
+                                  </button>
+                                )}
+
+                                {selectedSubmission.isEdited && !editingSubmission && (
+                                  <span className="bg-orange-100 text-orange-600 px-2 py-0.5 rounded text-[10px] font-black uppercase">Edited</span>
+                                )}
                                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Total Score</p>
                               </div>
                             </div>
@@ -3066,7 +3198,69 @@ const TeacherGradebook: React.FC<{
                               <div className="mt-6">
                                 <h5 className="text-sm font-black uppercase tracking-widest text-slate-400 mb-3">Student Answer with AI Marks</h5>
                                 <div className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-black relative inline-block w-full">
-                                  <div className="relative w-full h-auto"> {/* Wrapper for positioning */}
+                                  <div
+                                    className="relative w-full h-auto group cursor-crosshair touch-none"
+                                    onMouseDown={(e) => {
+                                      if (!editingSubmission || editingSubmission.id !== selectedSubmission.id) return;
+                                      e.preventDefault();
+                                      const rect = e.currentTarget.getBoundingClientRect();
+                                      const x = e.clientX - rect.left;
+                                      const y = e.clientY - rect.top;
+                                      setIsDrawing(true);
+                                      setDrawStart({ x, y });
+                                      setCurrentRect({ x, y, w: 0, h: 0 });
+                                      setShowAnnotationForm(false);
+                                    }}
+                                    onMouseMove={(e) => {
+                                      if (!isDrawing || !drawStart) return;
+                                      e.preventDefault();
+                                      const rect = e.currentTarget.getBoundingClientRect();
+                                      const x = e.clientX - rect.left;
+                                      const y = e.clientY - rect.top;
+
+                                      const w = x - drawStart.x;
+                                      const h = y - drawStart.y;
+
+                                      setCurrentRect({
+                                        x: w > 0 ? drawStart.x : x,
+                                        y: h > 0 ? drawStart.y : y,
+                                        w: Math.abs(w),
+                                        h: Math.abs(h)
+                                      });
+                                    }}
+                                    onMouseUp={(e) => {
+                                      if (!isDrawing || !drawStart || !currentRect) return;
+                                      setIsDrawing(false);
+
+                                      // Min size check (to avoid accidental dots)
+                                      if (currentRect.w < 10 || currentRect.h < 10) {
+                                        setCurrentRect(null);
+                                        setDrawStart(null);
+                                        return;
+                                      }
+
+                                      const rect = e.currentTarget.getBoundingClientRect();
+
+                                      // Convert to 0-1000 scale [ymin, xmin, ymax, xmax]
+                                      const scaleX = 1000 / rect.width;
+                                      const scaleY = 1000 / rect.height;
+
+                                      // box_2d: [ymin, xmin, ymax, xmax]
+                                      const box = [
+                                        currentRect.y * scaleY,
+                                        currentRect.x * scaleX,
+                                        (currentRect.y + currentRect.h) * scaleY,
+                                        (currentRect.x + currentRect.w) * scaleX
+                                      ];
+
+                                      setTempBox(box);
+                                      setAnnotationFormPos({
+                                        x: currentRect.x + currentRect.w + 10,
+                                        y: currentRect.y
+                                      });
+                                      setShowAnnotationForm(true);
+                                    }}
+                                  >
                                     <img
                                       src={selectedSubmission.studentAnswerImages[0]}
                                       alt="Student Answer"
@@ -3076,7 +3270,10 @@ const TeacherGradebook: React.FC<{
                                     {selectedSubmission.annotations?.map((ann, i) => (
                                       <div
                                         key={i}
-                                        className="absolute border-2 border-green-500 bg-green-500/20 rounded-lg flex items-center justify-center group pointer-events-none"
+                                        className={`absolute border-2 rounded-lg flex items-center justify-center group pointer-events-none ${ann.isManual
+                                            ? 'border-indigo-500 bg-indigo-500/20'
+                                            : 'border-green-500 bg-green-500/20'
+                                          }`}
                                         style={{
                                           top: `${ann.box_2d[0] / 10}%`,
                                           left: `${ann.box_2d[1] / 10}%`,
@@ -3091,15 +3288,152 @@ const TeacherGradebook: React.FC<{
 
                                         {/* Score Badge */}
                                         {ann.score !== undefined && (
-                                          <div className="absolute -top-3 -right-3 w-6 h-6 bg-green-600 text-white text-xs font-black rounded-full flex items-center justify-center shadow-lg border border-white z-10">
+                                          <div className={`absolute -top-3 -right-3 w-6 h-6 text-white text-xs font-black rounded-full flex items-center justify-center shadow-lg border border-white z-10 ${ann.isManual ? 'bg-indigo-600' : 'bg-green-600'
+                                            }`}>
                                             +{ann.score}
                                           </div>
+
                                         )}
                                       </div>
                                     ))}
+
+                                    {/* Current Drawing Rect */}
+                                    {currentRect && (
+                                      <div
+                                        className="absolute border-2 border-indigo-500 bg-indigo-500/20 z-20 pointer-events-none"
+                                        style={{
+                                          left: currentRect.x,
+                                          top: currentRect.y,
+                                          width: currentRect.w,
+                                          height: currentRect.h
+                                        }}
+                                      />
+                                    )}
+
+                                    {/* Annotation Input Popover */}
+                                    {showAnnotationForm && annotationFormPos && (
+                                      <div
+                                        className="absolute bg-white dark:bg-slate-800 p-4 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 z-[50] w-64 animate-in zoom-in-95 duration-200"
+                                        style={{
+                                          left: Math.min(annotationFormPos.x, 250),
+                                          top: annotationFormPos.y
+                                        }}
+                                        onMouseDown={(e) => e.stopPropagation()} // Prevent drag start
+                                      >
+                                        <h6 className="text-xs font-black uppercase text-slate-400 mb-2">Add Annotation</h6>
+                                        <div className="space-y-3">
+                                          <div>
+                                            <input
+                                              className="w-full bg-slate-100 dark:bg-slate-900 border-none rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-indigo-500"
+                                              placeholder="Label (e.g. Good Point)"
+                                              id="ann-label"
+                                            />
+                                          </div>
+                                          <div>
+                                            <input
+                                              type="number"
+                                              className="w-full bg-slate-100 dark:bg-slate-900 border-none rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-indigo-500"
+                                              placeholder="Score Change (e.g. +1, -0.5)"
+                                              step="0.5"
+                                              id="ann-score"
+                                            />
+                                          </div>
+                                          <div>
+                                            <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Affects Criteria</label>
+                                            <select className="w-full bg-slate-100 dark:bg-slate-900 border-none rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-indigo-500" id="ann-criterion">
+                                              <option value="">-- General / None --</option>
+                                              {assignment.markingPoints.map((m, i) => (
+                                                <option key={i} value={i}>{i + 1}. {m.point} (Max: {m.weight})</option>
+                                              ))}
+                                            </select>
+                                          </div>
+                                          <div className="flex gap-2 pt-1">
+                                            <button
+                                              className="flex-1 bg-green-500 hover:bg-green-600 text-white text-xs font-bold py-1.5 rounded-lg"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                const labelEl = document.getElementById('ann-label') as HTMLInputElement;
+                                                const scoreEl = document.getElementById('ann-score') as HTMLInputElement;
+                                                const critEl = document.getElementById('ann-criterion') as HTMLSelectElement;
+
+                                                const label = labelEl.value || "Teacher Note";
+                                                const score = parseFloat(scoreEl.value) || 0;
+                                                const criterionIdx = critEl.value ? parseInt(critEl.value) : undefined;
+
+                                                if (!editingSubmission || !tempBox) return;
+
+                                                setEditingSubmission(prev => {
+                                                  if (!prev) return null;
+
+                                                  const newAnn: Annotation = {
+                                                    label, score,
+                                                    box_2d: tempBox,
+                                                    isManual: true,
+                                                    criterionIndex: criterionIdx
+                                                  };
+
+                                                  const updatedAnnotations = [...(prev.annotations || []), newAnn];
+                                                  let updatedCriteriaScores = [...(prev.criteriaScores || [])];
+                                                  let updatedEditedCriteria = [...(editingSubmission?.editedCriteria || (selectedSubmission.editedCriteria || []))];
+
+                                                  if (!updatedEditedCriteria.length) updatedEditedCriteria = Array(assignment.markingPoints.length).fill(false);
+
+                                                  // Update Linked Criterion
+                                                  if (criterionIdx !== undefined && criterionIdx >= 0) {
+                                                    const currentCritScore = updatedCriteriaScores[criterionIdx] || 0;
+                                                    const maxCritScore = assignment.markingPoints[criterionIdx].weight;
+                                                    let newCritScore = currentCritScore + score;
+                                                    newCritScore = Math.max(0, Math.min(newCritScore, maxCritScore)); // Clamp
+
+                                                    updatedCriteriaScores[criterionIdx] = newCritScore;
+                                                    updatedEditedCriteria[criterionIdx] = true;
+                                                  }
+
+                                                  // Recalculate Total Score
+                                                  // Should be sum of ALL criteria + unlinked annotations
+                                                  const criteriaSum = updatedCriteriaScores.reduce((a, b) => a + (b || 0), 0);
+                                                  const unlinkedAnnotationSum = updatedAnnotations
+                                                    .filter(a => a.isManual && a.criterionIndex === undefined)
+                                                    .reduce((a, b) => a + (b.score || 0), 0);
+
+                                                  const cappedScore = Math.min(criteriaSum + unlinkedAnnotationSum, assignment.markingPoints.reduce((a, b) => a + b.weight, 0));
+
+                                                  return {
+                                                    ...prev,
+                                                    annotations: updatedAnnotations,
+                                                    criteriaScores: updatedCriteriaScores,
+                                                    editedCriteria: updatedEditedCriteria,
+                                                    score: cappedScore
+                                                  };
+                                                });
+
+                                                setShowAnnotationForm(false);
+                                                setCurrentRect(null);
+                                                setTempBox(null);
+                                              }}
+                                            >
+                                              Save
+                                            </button>
+                                            <button
+                                              className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold py-1.5 rounded-lg"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setShowAnnotationForm(false);
+                                                setCurrentRect(null);
+                                                setTempBox(null);
+                                              }}
+                                            >
+                                              Cancel
+                                            </button>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )}
+
                                   </div>
                                 </div>
                               </div>
+
                             ) : (
                               <p className="mt-4 text-sm text-slate-400 italic">No image available for this submission.</p>
                             )}
@@ -3111,20 +3445,74 @@ const TeacherGradebook: React.FC<{
                               {assignment.markingPoints.map((criterion, idx) => {
                                 const met = selectedSubmission.criteriasMet?.[idx];
                                 const score = selectedSubmission.criteriaScores?.[idx];
-                                const color = met === true
-                                  ? 'border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300'
-                                  : met === false
-                                    ? 'border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300'
-                                    : 'border-slate-200 dark:border-slate-700 bg-white/60 dark:bg-slate-800 text-slate-600 dark:text-slate-300';
+
+                                const isEditing = editingSubmission && editingSubmission.id === selectedSubmission.id;
+                                const originalScore = selectedSubmission.criteriaScores?.[idx] ?? 0;
+                                const currentScore = isEditing ? (editingSubmission.criteriaScores?.[idx] ?? 0) : originalScore;
+
+                                const wasEdited = selectedSubmission.editedCriteria?.[idx];
+                                const isChangedLocal = isEditing && currentScore !== originalScore;
+                                const showHighlight = isChangedLocal || wasEdited;
+
+                                const color = showHighlight
+                                  ? 'border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 shadow-sm border-2'
+                                  : met === true
+                                    ? 'border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300'
+                                    : met === false
+                                      ? 'border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300'
+                                      : 'border-slate-200 dark:border-slate-700 bg-white/60 dark:bg-slate-800 text-slate-600 dark:text-slate-300';
 
                                 return (
-                                  <div key={idx} className={`p-4 rounded-2xl border ${color} flex items-center justify-between gap-4`}>
+                                  <div
+                                    key={idx}
+                                    className={`p-4 rounded-2xl border ${color} flex items-center justify-between gap-4 transition-all`}
+                                  >
                                     <div className="flex items-start gap-3">
-                                      <div className="w-7 h-7 rounded-lg bg-white/70 dark:bg-slate-800/80 text-xs font-black flex items-center justify-center">{idx + 1}</div>
-                                      <div className="text-sm font-semibold leading-snug">{criterion.point}</div>
+                                      <div className={`w-7 h-7 rounded-lg text-xs font-black flex items-center justify-center ${met ? 'bg-emerald-200 dark:bg-emerald-900 text-emerald-800' : 'bg-white/70 dark:bg-slate-800/80'}`}>
+                                        {met ? '✓' : idx + 1}
+                                      </div>
+                                      <div className="text-sm font-semibold leading-snug select-none">{criterion.point}</div>
                                     </div>
                                     <div className="text-sm font-black">
-                                      {score !== undefined ? score : '—'} / {criterion.weight}
+                                      {editingSubmission && editingSubmission.id === selectedSubmission.id ? (
+                                        <select
+                                          value={editingSubmission.criteriaScores?.[idx] ?? 0}
+                                          onClick={e => e.stopPropagation()} // Prevent parent click
+                                          onChange={e => {
+                                            const newVal = parseFloat(e.target.value);
+                                            setEditingSubmission(prev => {
+                                              if (!prev) return null;
+                                              const newMet = [...(prev.criteriasMet || [])];
+                                              newMet[idx] = newVal > 0; // True if any points given
+
+                                              const newScores = [...(prev.criteriaScores || [])];
+                                              newScores[idx] = newVal;
+
+                                              // Recalculate total score
+                                              const criteriaSum = newScores.reduce((a, b) => a + (b || 0), 0);
+                                              // Only add scores from MANUAL annotations to avoid double counting AI marks
+                                              const annotationSum = prev.annotations?.filter(a => a.isManual).reduce((a, b) => a + (b.score || 0), 0) || 0;
+                                              const cappedScore = Math.min(criteriaSum + annotationSum, prev.maxScore);
+
+                                              return {
+                                                ...prev,
+                                                criteriasMet: newMet,
+                                                criteriaScores: newScores,
+                                                score: cappedScore
+                                              };
+                                            });
+                                          }}
+                                          className="bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded px-1 py-0.5 text-xs font-bold focus:ring-2 focus:ring-indigo-500"
+                                        >
+                                          {Array.from({ length: (criterion.weight * 2) + 1 }, (_, i) => i * 0.5).map(val => (
+                                            <option key={val} value={val}>{val}</option>
+                                          ))}
+                                        </select>
+                                      ) : (
+                                        <span>{score !== undefined ? score : '—'}</span>
+                                      )}
+
+                                      <span className="opacity-50 ml-1">/ {criterion.weight}</span>
                                     </div>
                                   </div>
                                 );
@@ -3136,12 +3524,13 @@ const TeacherGradebook: React.FC<{
                     </div>
                   </div>
                 </div>
-              )}
+              )
+              }
             </div>
           );
         })}
       </div>
-    </div>
+    </div >
   );
 };
 
