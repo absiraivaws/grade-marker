@@ -2,7 +2,11 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { Assignment, Submission, MarkingCriterion, Teacher, Student, Subject, Class, NoteCorrection, GeneratedNote } from '../types';
+import { BookOpen, GraduationCap, Users, FileText, CheckCircle, Clock, ChevronRight, ChevronDown, Search, Filter, MoreVertical, Download, X, Image as ImageIcon, Crop as CropIcon } from 'lucide-react';
 import { dbService } from '../services/dbService';
+import Cropper from 'react-easy-crop';
+import { getCroppedImg } from '../utils/cropImage';
+import { uploadBase64ToStorage } from '../services/pdfExtractor';
 import { extractMarkingPoints, analyzeTeachingNote, NoteSectionDraft, NoteAnalysisResult, createEnhancedNote, extractCorrectionSummary, applyNoteCorrection, extractModuleTitle } from '../services/geminiService';
 import { extractPDFContent, ExtractedImage } from '../services/pdfExtractor';
 import mermaid from 'mermaid';
@@ -148,6 +152,8 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
 
   const uniqueAssignedSubjects = Array.from(new Set(teacher?.assignedSubjects.map(s => s.subjectId)))
     .map(id => ({ id, name: subjectNames[id] || id }));
+
+
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1015,8 +1021,34 @@ const markdownToHtml = (markdown: string, isDarkMode: boolean = false): string =
   mask(/^\|(.+)\n\|[-\s:|]+\n((?:\|.+\n?)*)/gm, (match) => { // Added ^ anchor and multiline flag
     const lines = match.trim().split('\n').filter(line => line.trim());
     if (lines.length < 2) return match;
-    const headerRow = lines[0].split('|').map(cell => cell.trim()).filter(Boolean);
-    const bodyRows = lines.slice(2).map(line => line.split('|').map(cell => cell.trim()).filter(Boolean));
+
+    // Helper to process cell content (math, bold, italic) since tables are masked before global processing
+    const processCell = (content: string) => {
+      let processed = content.trim();
+      // Render Inline Math ($...$)
+      processed = processed.replace(/\$([^$\n]+?)\$/g, (_, latex) => {
+        try {
+          return katex.renderToString(latex.trim(), { displayMode: false, throwOnError: false, trust: true });
+        } catch (e) { return _; }
+      });
+      // Render Bold (**...**)
+      processed = processed.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      // Render Italic (*...*)
+      processed = processed.replace(/\*(.*?)\*/g, '<em>$1</em>');
+      return processed;
+    };
+
+    const headerRow = lines[0].split('|').map(cell => processCell(cell)).filter(c => c !== '');
+    // Note: slice(2) skips header and separator line
+    const bodyRows = lines.slice(2).map(line => {
+      // Split by pipe but ignore escaped pipes if possible (simple split for now)
+      return line.split('|').map(cell => processCell(cell)).filter((_, i, arr) => {
+        // Filter empty start/end cells caused by leading/trailing pipes
+        if (i === 0 && _ === '') return false;
+        if (i === arr.length - 1 && _ === '') return false;
+        return true;
+      });
+    });
 
     let table = `<div style="overflow-x: auto; margin: 20px 0;"><table style="width: 100%; border-collapse: collapse; border: 1px solid ${darkStyles.tableBorder}; border-radius: 8px;">`;
     table += `<thead><tr style="background-color: ${darkStyles.tableHeaderBg}; border-bottom: 2px solid ${darkStyles.tableBorder};">`;
@@ -1073,7 +1105,69 @@ const markdownToHtml = (markdown: string, isDarkMode: boolean = false): string =
 
   html = html
     // Images
-    .replace(/!\[(.*?)\]\((.*?)\)/g, `<div style="margin: 24px 0; text-align: center;"><img src="$2" alt="$1" style="max-width: 100%; height: auto; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1);" /><p style="font-size: 0.8em; color: gray; margin-top: 8px; font-style: italic;">$1</p></div>`)
+    // Images - Add group for relative positioning of crop button
+    // Images - Add group for relative positioning of crop button
+    // Images - Add group for relative positioning of crop button
+    .replace(/!\[(.*?)\]\((.*?)\)/g, (_, alt, src) => {
+      let urlObj: URL;
+      try {
+        urlObj = new URL(src);
+      } catch (e) {
+        // Fallback for relative URLs if any (though typically we use absolute)
+        urlObj = new URL(src, window.location.origin);
+      }
+
+      const params = urlObj.searchParams;
+      const crop = params.get('crop');
+
+      // Remove crop param for the display URL so it doesn't mess with backend if not supported
+      // But KEEP other params like Firebase tokens!
+      params.delete('crop');
+      const displayUrl = urlObj.toString();
+
+      // For the crop button data-src, we generally want the clean URL too
+      const cleanSrc = displayUrl;
+
+      let styles = 'max-width: 100%; height: auto; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1); cursor: pointer;';
+      let containerStyles = 'margin: 24px 0; text-align: center; position: relative; display: inline-block;';
+      let imgStyles = styles;
+
+      if (crop) {
+        // Parse ymin,xmin,ymax,xmax (0-1000 scale)
+        const [ymin, xmin, ymax, xmax] = crop.split(',').map(Number);
+
+        if (!isNaN(ymin) && !isNaN(xmin) && !isNaN(ymax) && !isNaN(xmax)) {
+          // Calculate percentages
+          const width = xmax - xmin;
+          const height = ymax - ymin;
+
+          // Virtual crop container
+          containerStyles += ` overflow: hidden; width: 100%; max-width: 600px; aspect-ratio: ${width}/${height}; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1);`;
+
+          // Image positioning to "zoom" into the crop area
+          // Scale: 1000 / width * 100%
+          const scaleX = (1000 / width) * 100;
+          const scaleY = (1000 / height) * 100;
+
+          // Position: -xmin% * scale
+          // Actually simpler: 
+          // object-fit: none (or cover with specific position?)
+          // Standard CSS masking technique:
+          // inner img width = (1000/width) * 100 % of container
+          // margin-left = -(xmin/width) * 100 %
+
+          imgStyles = `width: ${(1000 / width) * 100}%; max-width: none; height: ${(1000 / height) * 100}%; margin-top: -${(ymin / height) * 100}%; margin-left: -${(xmin / width) * 100}%; display: block;`;
+        }
+      }
+
+      return `<div class="group" style="${containerStyles}">
+         <img src="${displayUrl}" alt="${alt}" data-role="editable-image" style="${imgStyles}" />
+         <button class="crop-btn absolute top-2 right-2 bg-black/70 hover:bg-black/90 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm z-10" title="Crop Image" data-src="${cleanSrc}">
+           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/><path d="M22 6L2 22"/></svg>
+         </button>
+         ${!crop ? `<p style="font-size: 0.8em; color: gray; margin-top: 8px; font-style: italic;">${alt}</p>` : ''}
+       </div>`;
+    })
     // Paragraphs - Transform remaining text but ignore our specific placeholders if they happen to appear (unlikely but safe)
     .replace(/\n\n/g, '<div style="margin-bottom: 20px;"></div>')
     .replace(/^(?!<[hluibprt]|\u0000|<div)(.+)$/gm, (match) => { // Modified negative lookahead to include \u0000
@@ -1091,9 +1185,33 @@ const markdownToHtml = (markdown: string, isDarkMode: boolean = false): string =
   return `<div class="enhanced-note-content" style="font-family: 'Inter', system-ui, sans-serif; line-height: 1.6; color: ${darkStyles.textColor};">${html}</div>`;
 };
 
-const MarkdownRenderer: React.FC<{ content: string; isDarkMode: boolean }> = ({ content, isDarkMode }) => {
+const MarkdownRenderer: React.FC<{
+  content: string;
+  isDarkMode: boolean;
+  onCrop?: (src: string) => void;
+}> = ({ content, isDarkMode, onCrop }) => {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const html = React.useMemo(() => markdownToHtml(content, isDarkMode), [content, isDarkMode]);
+
+  React.useEffect(() => {
+    // Event delegation for crop buttons
+    const handleCropClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const btn = target.closest('.crop-btn');
+      if (btn && onCrop) {
+        const src = btn.getAttribute('data-src');
+        if (src) onCrop(src);
+      }
+    };
+
+    const container = containerRef.current;
+    if (container) {
+      container.addEventListener('click', handleCropClick);
+    }
+    return () => {
+      if (container) container.removeEventListener('click', handleCropClick);
+    };
+  }, [onCrop]);
 
   React.useEffect(() => {
     console.log('[MarkdownRenderer] Effect triggered');
@@ -1267,6 +1385,67 @@ const MarkdownRenderer: React.FC<{ content: string; isDarkMode: boolean }> = ({ 
   />;
 };
 
+// --- Crop Modal Component ---
+const CropModal: React.FC<{
+  imageSrc: string;
+  onClose: () => void;
+  onCropComplete: (croppedAreaPixels: any) => void;
+}> = ({ imageSrc, onClose, onCropComplete }) => {
+  const [crop, setCrop] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [croppedAreaPixels, setCroppedAreaPixels] = useState(null);
+
+  return (
+    <div className="fixed inset-0 z-[70] bg-black/80 flex items-center justify-center p-4">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
+          <h3 className="text-lg font-bold">Crop Image</h3>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="relative h-[50vh] bg-slate-100 dark:bg-black/50">
+          <Cropper
+            image={imageSrc}
+            crop={crop}
+            zoom={zoom}
+            aspect={undefined} // Free crop
+            onCropChange={setCrop}
+            onCropComplete={(_, croppedAreaPixels) => setCroppedAreaPixels(croppedAreaPixels)}
+            onZoomChange={setZoom}
+          />
+        </div>
+
+        <div className="p-4 flex gap-4 items-center justify-end border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+          <div className="flex-1">
+            <label className="text-xs font-semibold mb-1 block">Zoom</label>
+            <input
+              type="range"
+              value={zoom}
+              min={1}
+              max={3}
+              step={0.1}
+              aria-labelledby="Zoom"
+              onChange={(e) => setZoom(Number(e.target.value))}
+              className="w-full"
+            />
+          </div>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">
+            Cancel
+          </button>
+          <button
+            onClick={() => onCropComplete(croppedAreaPixels)}
+            className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-lg shadow-indigo-100 dark:shadow-none"
+          >
+            Save Crop
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- Presentation Mode Component ---
 const PresentationView: React.FC<{
   content: string;
@@ -1417,7 +1596,9 @@ const TeacherNotes: React.FC<{
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [correctionPrompt, setCorrectionPrompt] = useState('');
+  const [correctionImages, setCorrectionImages] = useState<string[]>([]);
   const [isApplyingCorrection, setIsApplyingCorrection] = useState(false);
+  const [croppingImageSrc, setCroppingImageSrc] = useState<string | null>(null);
   const [extractedPDFContent, setExtractedPDFContent] = useState<{ text: string; images: ExtractedImage[] } | null>(null);
   const [isExtractingPDF, setIsExtractingPDF] = useState(false);
   const [suggestedModuleTitle, setSuggestedModuleTitle] = useState('');
@@ -1503,6 +1684,22 @@ const TeacherNotes: React.FC<{
     reader.readAsDataURL(file);
   };
 
+  const handleCorrectionImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files) {
+      const newFiles = Array.from(event.target.files) as File[];
+
+      newFiles.forEach(file => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          if (typeof reader.result === 'string') {
+            setCorrectionImages(prev => [...prev, reader.result as string]);
+          }
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+  };
+
   const handleAnalyze = async () => {
     if (!selectedClassId || !selectedSubjectId || noteBase64s.length === 0) {
       alert('Please select class, subject, and upload a note.');
@@ -1539,7 +1736,8 @@ const TeacherNotes: React.FC<{
 
       // Extract PDF content (text + images)
       let extractedText = '';
-      let pageImages: Array<{ pageNumber: number; url: string }> = [];
+      // Updated to include raw imageData for AI context
+      let pageImages: Array<{ pageNumber: number; url: string; imageData: string }> = [];
 
       try {
         const allExtractedContent = await Promise.all(
@@ -1548,7 +1746,7 @@ const TeacherNotes: React.FC<{
 
         extractedText = allExtractedContent.map(c => c.text).join('\n\n');
         pageImages = allExtractedContent.flatMap(c =>
-          c.images.map(img => ({ pageNumber: img.pageNumber, url: img.url }))
+          c.images.map(img => ({ pageNumber: img.pageNumber, url: img.url, imageData: img.imageData }))
         );
 
         setExtractedPDFContent({
@@ -1592,19 +1790,16 @@ const TeacherNotes: React.FC<{
 
       // Use a single comprehensive regex that captures any format
       pageImages.forEach(img => {
-        const replacement = `![Page ${img.pageNumber} from textbook](${img.url})`;
+        // Updated regex to catch loose formats: [IMAGE:Page X | coords], IMAGE:Page X | coords, with spaces
+        // Optional brackets, allowed spaces around pipe and numbers
+        const regex = new RegExp(`\\[?IMAGE:page[_\\s]?${img.pageNumber}(?:\\s*\\|\\s*([\\d,\\s]+))?\\]?`, 'gi');
 
-        // Match all variations: [IMAGE:page_1], [IMAGE:page 1], [Image:page1], etc.
-        // Case-insensitive, with or without underscore/space
-        const regex = new RegExp(`\\[IMAGE:page[_\\s]?${img.pageNumber}\\]`, 'gi');
-
-        const beforeCount = (processedContent.match(regex) || []).length;
-        processedContent = processedContent.replace(regex, replacement);
-        const afterCount = (processedContent.match(regex) || []).length;
-
-        if (beforeCount > 0) {
-          console.log(`Replaced ${beforeCount} occurrences of page ${img.pageNumber} image markers`);
-        }
+        // Replacement function to handle the captured coords
+        processedContent = processedContent.replace(regex, (match, coords) => {
+          // If coords exist, append as query param for the frontend renderer to pick up
+          const url = coords ? `${img.url}?crop=${coords.replace(/\s/g, '')}` : img.url;
+          return `![Page ${img.pageNumber} diagram](${url})`;
+        });
       });
 
       setEnhancedNote(processedContent);
@@ -1643,7 +1838,10 @@ const TeacherNotes: React.FC<{
         teacherId,
         subjectId: selectedSubjectId,
         classId: selectedClassId,
+        className: classNames[selectedClassId] || selectedClassId,
+        subjectName: subjectNames[selectedSubjectId] || selectedSubjectId,
         content: enhancedNote,
+        summary: summary || 'No summary available',
         moduleTitle: moduleTitle.trim(),
         isLatest: true,
         groupId: editingGroupId || undefined
@@ -1731,21 +1929,93 @@ const TeacherNotes: React.FC<{
   };
 
   const handleApplyCorrection = async () => {
-    if (!enhancedNote || !correctionPrompt.trim()) {
-      alert('Please provide a correction instruction.');
-      return;
-    }
+    if (!enhancedNote || !correctionPrompt.trim()) return;
 
     setIsApplyingCorrection(true);
     try {
-      const correctedContent = await applyNoteCorrection(enhancedNote, correctionPrompt);
-      setEnhancedNote(correctedContent);
+      // 1. Upload correction images to get public URLs
+      const imageUrls: string[] = [];
+      if (correctionImages.length > 0) {
+        try {
+          const uploads = await Promise.all(correctionImages.map((img, idx) =>
+            uploadBase64ToStorage(img, teacherId, `correction_${Date.now()}_${idx}`)
+          ));
+          imageUrls.push(...uploads);
+        } catch (uploadErr) {
+          console.error("Failed to upload correction images", uploadErr);
+          // Proceed without images if upload fails? Or warn?
+          // For now proceed, but AI won't link them properly.
+        }
+      }
+
+      const newContent = await applyNoteCorrection(enhancedNote, correctionPrompt, correctionImages, imageUrls);
+
+      const summary = await extractCorrectionSummary(enhancedNote, newContent);
+
+      // Save the correction
+      const correction: NoteCorrection = {
+        id: crypto.randomUUID(),
+        originalContent: enhancedNote,
+        correctedContent: newContent,
+        correctionPrompt,
+        correctionSummary: summary,
+        timestamp: Date.now(),
+        teacherId
+      };
+
+      // Update DB
+      await dbService.saveNoteCorrection(adminId, selectedSubjectId, selectedClassId, correction);
+
+      setEnhancedNote(newContent);
       setCorrectionPrompt('');
+      setCorrectionImages([]); // Clear images after application
       alert('✅ Correction applied! Review the changes below.');
     } catch (err: any) {
       alert('Failed to apply correction: ' + err.message);
     } finally {
       setIsApplyingCorrection(false);
+    }
+  };
+
+  const handleCropClick = (src: string) => {
+    setCroppingImageSrc(src);
+  };
+
+  const handleCropComplete = async (croppedAreaPixels: any) => {
+    if (!croppingImageSrc || !croppedAreaPixels) return;
+    try {
+      const croppedBlob = await getCroppedImg(croppingImageSrc, croppedAreaPixels);
+      if (!croppedBlob) throw new Error("Failed to crop image");
+
+      // Convert blob to base64 for upload
+      const reader = new FileReader();
+      reader.readAsDataURL(croppedBlob);
+      reader.onloadend = async () => {
+        const base64data = reader.result as string;
+
+        // Upload
+        const newUrl = await uploadBase64ToStorage(base64data, teacherId, `cropped_${Date.now()}`);
+
+        // Update content
+        // We need to replace the specific instance of the image URL in the markdown
+        // The URL might be used multiple times, but standard behavior is to update all or just this one.
+        // Since we don't have a unique ID for each image instance easily, replacing by URL is safest.
+        if (enhancedNote) {
+          // Replace the old URL with the new URL
+          // Escape special chars in old URL for regex
+          const oldUrlRegex = new RegExp(croppingImageSrc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+          const updatedNote = enhancedNote.replace(oldUrlRegex, newUrl);
+          setEnhancedNote(updatedNote);
+          if (originalEnhancedNote === enhancedNote) {
+            setOriginalEnhancedNote(updatedNote); // Keep synced if it was original
+          }
+        }
+
+        setCroppingImageSrc(null);
+      };
+    } catch (err) {
+      console.error("Crop failed", err);
+      alert("Failed to save cropped image");
     }
   };
 
@@ -1764,21 +2034,29 @@ const TeacherNotes: React.FC<{
       const correctionSummary = await extractCorrectionSummary(originalEnhancedNote, enhancedNote);
 
       // Save the correction to Firestore for future learning
-      await dbService.saveNoteCorrection(adminId, {
-        teacherId,
-        subjectId: selectedSubjectId,
-        classId: selectedClassId,
+      // Save the correction to Firestore for future learning
+      // For manual edits, we treat the prompt as "Manual Enhancement"
+      const correction: NoteCorrection = {
+        id: crypto.randomUUID(),
         originalContent: originalEnhancedNote,
         correctedContent: enhancedNote,
-        correctionSummary
-      });
+        correctionPrompt: "Manual Enhancement via Editor",
+        correctionSummary,
+        timestamp: Date.now(),
+        teacherId
+      };
+
+      await dbService.saveNoteCorrection(adminId, selectedSubjectId, selectedClassId, correction);
 
       // Save the corrected note as the latest version
       await dbService.saveGeneratedNote(adminId, {
         teacherId,
         subjectId: selectedSubjectId,
         classId: selectedClassId,
+        className: classNames[selectedClassId] || selectedClassId,
+        subjectName: subjectNames[selectedSubjectId] || selectedSubjectId,
         content: enhancedNote,
+        summary: summary || 'Updated note',
         moduleTitle: moduleTitle || suggestedModuleTitle || 'Updated Note',
         isLatest: true
       });
@@ -2240,7 +2518,7 @@ const TeacherNotes: React.FC<{
               </div>
             )}
 
-            <MarkdownRenderer content={enhancedNote} isDarkMode={isDarkMode} />
+            <MarkdownRenderer content={enhancedNote} isDarkMode={isDarkMode} onCrop={handleCropClick} />
           </div>
 
           {/* AI-Powered Correction Prompt */}
@@ -2270,13 +2548,41 @@ const TeacherNotes: React.FC<{
               💡 Be specific! Tell AI what to add, modify, or remove and where to place it.
             </p>
 
-            <button
-              onClick={handleApplyCorrection}
-              disabled={isApplyingCorrection || !correctionPrompt.trim()}
-              className="w-full px-6 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black shadow-lg shadow-blue-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
-            >
-              {isApplyingCorrection ? '⏳ Applying Correction...' : '✨ Apply Correction'}
-            </button>
+            {/* Correction Images Preview */}
+            <div className="flex gap-2 mb-4 overflow-x-auto">
+              {correctionImages.map((img, idx) => (
+                <div key={idx} className="relative group flex-shrink-0">
+                  <img src={img} alt={`Correction context ${idx}`} className="w-16 h-16 object-cover rounded-lg border border-slate-200 dark:border-slate-700" />
+                  <button
+                    onClick={() => setCorrectionImages(prev => prev.filter((_, i) => i !== idx))}
+                    className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Remove image"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-2 items-center">
+              <label className="cursor-pointer p-3 bg-slate-100 dark:bg-slate-700 text-slate-500 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={handleCorrectionImageUpload}
+                />
+                <ImageIcon size={20} />
+              </label>
+              <button
+                onClick={handleApplyCorrection}
+                disabled={isApplyingCorrection || (!correctionPrompt.trim() && correctionImages.length === 0)}
+                className="flex-1 px-6 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black shadow-lg shadow-blue-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
+              >
+                {isApplyingCorrection ? '⏳ Applying Correction...' : '✨ Apply Correction'}
+              </button>
+            </div>
           </div>
 
 
@@ -2379,6 +2685,15 @@ const TeacherNotes: React.FC<{
         </div>
       )}
       {/* Presentation Mode Overlay */}
+      {/* Image Crop Modal */}
+      {croppingImageSrc && (
+        <CropModal
+          imageSrc={croppingImageSrc}
+          onClose={() => setCroppingImageSrc(null)}
+          onCropComplete={handleCropComplete}
+        />
+      )}
+
       {isPresenting && enhancedNote && (
         <PresentationView
           content={enhancedNote}

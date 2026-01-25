@@ -105,21 +105,25 @@ export interface GeneratedNote {
   teacherId: string;
   subjectId: string;
   classId: string;
+  className?: string;
+  subjectName?: string;
   content: string;
-  moduleTitle: string; // Module name/number (e.g., "Module 1: Introduction to Physics")
+  summary: string;
   createdAt: number;
-  updatedAt: number;
+  updatedAt?: number;
+  moduleTitle?: string;
+  originalContent?: string;
   isLatest: boolean;
-  groupId?: string; // ID of the first note in this series (for versioning)
+  groupId?: string;
 }
 
 export interface NoteCorrection {
   id: string;
-  teacherId: string;
-  subjectId: string;
-  classId: string;
   originalContent: string;
   correctedContent: string;
-  correctionSummary: string; // AI-generated summary of what was corrected
-  createdAt: number;
+  correctionPrompt: string;
+  correctionSummary: string;
+  timestamp: number;
+  teacherId: string;
+  createdAt?: number; // DB timestamp
 }

@@ -333,9 +333,11 @@ export const dbService = {
   },
 
   // --- Note Corrections (Learning from Teacher Feedback) ---
-  async saveNoteCorrection(adminId: string, correction: Omit<NoteCorrection, 'id' | 'createdAt'>) {
+  async saveNoteCorrection(adminId: string, subjectId: string, classId: string, correction: NoteCorrection) {
     const docRef = await addDoc(getNestedColl(adminId, 'noteCorrections'), {
       ...correction,
+      subjectId,
+      classId,
       createdAt: serverTimestamp()
     });
     return docRef.id;
