@@ -3,7 +3,11 @@ import React, { useState, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { Assignment, Submission, MarkingCriterion, Teacher, Student, Subject, Class, NoteCorrection, GeneratedNote } from '../types';
 import { dbService } from '../services/dbService';
-import { extractMarkingPoints, analyzeTeachingNote, NoteSectionDraft, NoteAnalysisResult, createEnhancedNote, extractCorrectionSummary, applyNoteCorrection } from '../services/geminiService';
+import { extractMarkingPoints, analyzeTeachingNote, NoteSectionDraft, NoteAnalysisResult, createEnhancedNote, extractCorrectionSummary, applyNoteCorrection, extractModuleTitle } from '../services/geminiService';
+import { extractPDFContent, ExtractedImage } from '../services/pdfExtractor';
+import mermaid from 'mermaid';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
 
 const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ teacherId, adminId }) => {
   const [teacher, setTeacher] = useState<Teacher | null>(null);
@@ -871,6 +875,519 @@ const SubjectClassRow: React.FC<{ subject: any, adminId: string }> = ({ subject,
   );
 };
 
+// Global counter for unique Mermaid IDs across the application usage
+const generateMermaidId = () => {
+  return `mermaid-${Math.random().toString(36).substr(2, 9)}-${Date.now()}`;
+};
+
+const markdownToHtml = (markdown: string, isDarkMode: boolean = false): string => {
+  let html = markdown;
+  const blocks: string[] = [];
+
+  const darkStyles = isDarkMode ? {
+    textColor: '#f3f4f6',
+    headingColor: '#ffffff',
+    codeBlockBg: '#374151',
+    codeBlockColor: '#f3f4f6',
+    inlineCodeBg: '#4b5563',
+    inlineCodeColor: '#f3f4f6',
+    quoteColor: '#d1d5db',
+    quoteBorder: '#9ca3af',
+    tableBorder: '#6b7280',
+    tableHeaderBg: '#374151',
+    tableRowBg1: 'transparent',
+    tableRowBg2: '#1f2937',
+    hrBorder: '#6b7280'
+  } : {
+    textColor: '#1f2937',
+    headingColor: '#111827',
+    codeBlockBg: '#f9fafb',
+    codeBlockColor: '#1f2937',
+    inlineCodeBg: '#e5e7eb',
+    inlineCodeColor: '#1f2937',
+    quoteColor: '#4b5563',
+    quoteBorder: '#d1d5db',
+    tableBorder: '#e5e7eb',
+    tableHeaderBg: '#f3f4f6',
+    tableRowBg1: '#ffffff',
+    tableRowBg2: '#f9fafb',
+    hrBorder: '#e5e7eb'
+  };
+
+  // Helper to escape HTML characters in code blocks
+  const escapeHtml = (unsafe: string) => {
+    return unsafe
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  };
+
+  // Helper to mask blocks with a unique placeholder
+  const mask = (regex: RegExp, formatter: (match: string, ...args: any[]) => string) => {
+    html = html.replace(regex, (match, ...args) => {
+      const content = formatter(match, ...args);
+      // Use a safe, unique placeholder not likely to be in user text
+      const placeholder = `\u0000_B_${blocks.length}_B_\u0000`;
+      blocks.push(content);
+      return placeholder;
+    });
+  };
+
+  // 1. Masking Phase - Protect complex blocks from being broken by paragraph/inline logic
+
+  // Mask Reaction Blocks (Animated)
+  mask(/^[ \t]*(`{3,}|~{3,})reaction\s*[\r\n]+([\s\S]*?)[\r\n]+[ \t]*\1/gm, (_, fence, content) => {
+    // Split by operators (+, ->, =, →) while keeping delimiters
+    const parts = content.trim().split(/(\+|->|→|=)/g).map(s => s.trim()).filter(Boolean);
+
+    let reactionHtml = `<div class="reaction-wrapper flex flex-wrap items-center justify-center gap-4 my-8 p-6 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-200 dark:border-slate-700">`;
+
+    parts.forEach((part, index) => {
+      const isOperator = ['+', '->', '→', '='].includes(part);
+      const delay = index * 200; // Stagger animation
+
+      // Render content (try KaTeX for formulas, or plain text for operators)
+      let renderedPart = part;
+      if (!isOperator) {
+        try {
+          renderedPart = katex.renderToString(part, { displayMode: false, throwOnError: false });
+        } catch { } // Fallback to text
+      } else {
+        // Style operators
+        renderedPart = `<span class="text-2xl font-black text-slate-400 dark:text-slate-500">${part}</span>`;
+      }
+
+      reactionHtml += `<div class="reaction-part animate-fade-in-up" style="animation-delay: ${delay}ms;">${renderedPart}</div>`;
+    });
+
+    reactionHtml += `</div>`;
+    return reactionHtml;
+  });
+
+  // Mask SMILES Blocks (2D Molecules)
+  mask(/^[ \t]*(`{3,}|~{3,})smiles\s*[\r\n]+([\s\S]*?)[\r\n]+[ \t]*\1/gm, (_, fence, content) => {
+    const smiles = content.trim();
+    // Generate a unique ID for this canvas
+    const id = `smiles-${Math.random().toString(36).substr(2, 9)}`;
+    // We defer the actual drawing to the React component or a separate effect,
+    // but here we just produce the container.
+    // However, since markdownToHtml is pure string manipulation, we need a way to trigger the drawing.
+    // We will use a script tag or a custom element that the useEffect can pick up? 
+    // BETTER: Use the same pattern as Mermaid -> Render a specific container and let useEffect find it.
+
+    return `<div class="smiles-wrapper flex justify-center my-6 p-4 bg-white dark:bg-white/5 rounded-2xl border border-slate-200 dark:border-slate-700/50" data-smiles="${smiles}" id="${id}">
+              <canvas id="canvas-${id}" width="400" height="300"></canvas>
+            </div>`;
+  });
+
+  // Mask Mermaid (Support ``` and ~~~, and optional leading whitespace)
+  mask(/^[ \t]*(`{3,}|~{3,})mermaid\s*[\r\n]+([\s\S]*?)[\r\n]+[ \t]*\1/gm, (_, fence, code) => {
+    // Use unique ID to prevent conflicts
+    const id = generateMermaidId();
+    // Escape the code to prevent HTML injection/breaking inside <pre>
+    const escapedCode = escapeHtml(code.trim());
+
+    return `<div class="mermaid-container" style="margin: 24px 0; width: 100%;">` +
+      `<div class="mermaid-loading" style="font-size: 0.8em; color: gray; margin-bottom: 5px; font-style: italic;">Rendering diagram...</div>` +
+      `<div class="mermaid-wrapper" style="background: ${isDarkMode ? '#1f2937' : '#ffffff'}; padding: 24px; border-radius: 12px; border: 1px solid ${darkStyles.tableBorder}; overflow-x: auto; text-align: center;">` +
+      `<pre class="mermaid" id="${id}" style="display: block; margin: 0 auto; text-align: left;">${escapedCode}</pre>` +
+      `</div>` +
+      `</div>`;
+  });
+
+  // Mask LaTeX Display ($$ ... $$)
+  mask(/\$\$([\s\S]*?)\$\$/g, (_, latex) => {
+    try {
+      return `<div class="math-display" style="margin: 20px 0; padding: 10px; overflow-x: auto; background: ${isDarkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)'}; border-radius: 8px;">${katex.renderToString(latex.trim(), {
+        displayMode: true,
+        throwOnError: false,
+        trust: true
+      })}</div>`;
+    } catch (e) {
+      console.error("KaTeX rendering error:", e, latex);
+      return `<pre style="color: red; font-size: 0.9em; padding: 10px; border: 1px solid red; border-radius: 4px;">Error rendering formula: ${e instanceof Error ? e.message : String(e)}</pre>`;
+    }
+  });
+
+  // Mask Tables (Robust matching for pipe tables)
+  mask(/^\|(.+)\n\|[-\s:|]+\n((?:\|.+\n?)*)/gm, (match) => { // Added ^ anchor and multiline flag
+    const lines = match.trim().split('\n').filter(line => line.trim());
+    if (lines.length < 2) return match;
+    const headerRow = lines[0].split('|').map(cell => cell.trim()).filter(Boolean);
+    const bodyRows = lines.slice(2).map(line => line.split('|').map(cell => cell.trim()).filter(Boolean));
+
+    let table = `<div style="overflow-x: auto; margin: 20px 0;"><table style="width: 100%; border-collapse: collapse; border: 1px solid ${darkStyles.tableBorder}; border-radius: 8px;">`;
+    table += `<thead><tr style="background-color: ${darkStyles.tableHeaderBg}; border-bottom: 2px solid ${darkStyles.tableBorder};">`;
+    headerRow.forEach(cell => { table += `<th style="padding: 14px; text-align: left; font-weight: 800; color: ${darkStyles.headingColor}; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.05em;">${cell}</th>`; });
+    table += '</tr></thead><tbody>';
+    bodyRows.forEach((row, idx) => {
+      table += `<tr style="background-color: ${idx % 2 === 0 ? darkStyles.tableRowBg1 : darkStyles.tableRowBg2}; border-bottom: 1px solid ${darkStyles.tableBorder};">`;
+      row.forEach(cell => { table += `<td style="padding: 14px; color: ${darkStyles.textColor}; font-size: 0.95em;">${cell}</td>`; });
+      table += '</tr>';
+    });
+    table += '</tbody></table></div>';
+    return table;
+  });
+
+  // Mask Code Blocks (Generic)
+  mask(/^[ \t]*(`{3,}|~{3,})(?!mermaid)([\s\S]*?)[\r\n]+[ \t]*\1/gm, (_, fence, code) => {
+    // Escape generic code blocks too
+    const escapedCode = escapeHtml(code.trim());
+    return `<pre style="background: ${darkStyles.codeBlockBg}; color: ${darkStyles.codeBlockColor}; padding: 16px; border-radius: 12px; overflow-x: auto; margin: 20px 0; border: 1px solid ${darkStyles.tableBorder}; font-family: 'JetBrains Mono', monospace; font-size: 0.9em;"><code>${escapedCode}</code></pre>`;
+  });
+
+  // Mask Inline LaTeX ($ ... $)
+  mask(/\$([^$\n]+?)\$/g, (match, latex) => {
+    try {
+      return katex.renderToString(latex.trim(), { displayMode: false, throwOnError: false, trust: true });
+    } catch (e) {
+      return match;
+    }
+  });
+
+  // 2. Transformation Phase - Standard Markdown
+  html = html
+    // Headers
+    .replace(/^# (.*?)$/gm, `<h1 style="font-size: 2.25em; font-weight: 900; margin: 32px 0 16px; color: ${darkStyles.headingColor}; letter-spacing: -0.02em;">$1</h1>`)
+    .replace(/^## (.*?)$/gm, `<h2 style="font-size: 1.75em; font-weight: 800; margin: 28px 0 14px; color: ${darkStyles.headingColor}; letter-spacing: -0.01em; border-bottom: 2px solid ${isDarkMode ? '#374151' : '#f1f5f9'}; padding-bottom: 8px;">$1</h2>`)
+    .replace(/^### (.*?)$/gm, `<h3 style="font-size: 1.35em; font-weight: 700; margin: 24px 0 12px; color: ${darkStyles.headingColor};">$1</h3>`)
+    .replace(/^#### (.*?)$/gm, `<h4 style="font-size: 1.2em; font-weight: 700; margin: 20px 0 10px; color: ${darkStyles.headingColor};">$1</h4>`)
+    .replace(/^##### (.*?)$/gm, `<h5 style="font-size: 1.1em; font-weight: 700; margin: 16px 0 8px; color: ${darkStyles.headingColor};">$1</h5>`)
+    .replace(/^###### (.*?)$/gm, `<h6 style="font-size: 1em; font-weight: 700; margin: 16px 0 8px; color: ${darkStyles.headingColor}; text-transform: uppercase;">$1</h6>`)
+    // Bold/Italic
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    // Inline Code
+    .replace(/`(.*?)`/g, (_, code) => `<code style="background: ${darkStyles.inlineCodeBg}; color: ${darkStyles.inlineCodeColor}; padding: 2px 6px; border-radius: 6px; font-family: monospace; font-size: 0.9em;">${escapeHtml(code)}</code>`)
+    // Blockquotes
+    .replace(/^> (.*?)$/gm, `<blockquote style="border-left: 4px solid ${darkStyles.quoteBorder}; padding: 8px 20px; margin: 20px 0; color: ${darkStyles.quoteColor}; background: ${isDarkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.01)'}; border-radius: 0 12px 12px 0; font-style: italic;">$1</blockquote>`)
+    // HR
+    .replace(/^---$/gm, `<hr style="margin: 32px 0; border: none; border-top: 2px solid ${darkStyles.hrBorder};" />`)
+    // Lists
+    .replace(/^\- (.*?)$/gm, '<li>$1</li>');
+
+  // Wrap groups of <li> into <ul>
+  html = html.replace(/(<li>.*<\/li>)+/g, (match) => `<ul style="list-style: disc; margin: 20px 0 20px 24px; color: ${darkStyles.textColor}; space-y: 8px;">${match}</ul>`);
+
+  html = html
+    // Images
+    .replace(/!\[(.*?)\]\((.*?)\)/g, `<div style="margin: 24px 0; text-align: center;"><img src="$2" alt="$1" style="max-width: 100%; height: auto; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1);" /><p style="font-size: 0.8em; color: gray; margin-top: 8px; font-style: italic;">$1</p></div>`)
+    // Paragraphs - Transform remaining text but ignore our specific placeholders if they happen to appear (unlikely but safe)
+    .replace(/\n\n/g, '<div style="margin-bottom: 20px;"></div>')
+    .replace(/^(?!<[hluibprt]|\u0000|<div)(.+)$/gm, (match) => { // Modified negative lookahead to include \u0000
+      if (match.trim() && !match.startsWith('<') && !match.includes('\u0000_B_')) {
+        return `<p style="margin-bottom: 16px; line-height: 1.7; color: ${darkStyles.textColor}; font-size: 1.05em;">${match}</p>`;
+      }
+      return match;
+    });
+
+  // 3. Unmasking Phase - Restore protected blocks
+  blocks.forEach((content, i) => {
+    html = html.replace(`\u0000_B_${i}_B_\u0000`, content);
+  });
+
+  return `<div class="enhanced-note-content" style="font-family: 'Inter', system-ui, sans-serif; line-height: 1.6; color: ${darkStyles.textColor};">${html}</div>`;
+};
+
+const MarkdownRenderer: React.FC<{ content: string; isDarkMode: boolean }> = ({ content, isDarkMode }) => {
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const html = React.useMemo(() => markdownToHtml(content, isDarkMode), [content, isDarkMode]);
+
+  React.useEffect(() => {
+    console.log('[MarkdownRenderer] Effect triggered');
+
+    const renderDiagrams = async () => {
+      try {
+        if (!containerRef.current) {
+          console.log('[MarkdownRenderer] Ref null, retry later?');
+          return;
+        }
+        const elements = containerRef.current?.querySelectorAll('.mermaid');
+        console.log(`[MarkdownRenderer] Found ${elements?.length || 0} mermaid elements`);
+
+        if (!elements || elements.length === 0) return;
+
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: isDarkMode ? 'dark' : 'default',
+          securityLevel: 'loose',
+          logLevel: 'error',
+          fontFamily: 'Arial, sans-serif'
+        });
+
+        const nodeList = Array.from(elements);
+        for (const node of nodeList) {
+          const el = node as HTMLElement;
+          const id = el.id;
+          console.log(`[MarkdownRenderer] Processing diagram ${id}`);
+
+          // Check if already processed
+          if (el.getAttribute('data-rendered') === 'true' || el.getAttribute('data-rendered') === 'error') {
+            console.log(`[MarkdownRenderer] Skipping processed ${id}`);
+            continue;
+          }
+
+          const code = el.textContent || '';
+          const wrapper = el.parentElement; // .mermaid-wrapper
+          const container = wrapper?.parentElement; // .mermaid-container
+          const loading = container?.querySelector('.mermaid-loading') as HTMLElement;
+
+          if (!code.trim()) {
+            console.warn(`[MarkdownRenderer] Empty code for ${id}`);
+            continue;
+          }
+
+          try {
+            console.log(`[MarkdownRenderer] Parsing ${id}`);
+            // Attempt 1: Parse check with timeout
+            const parsePromise = mermaid.parse(code);
+            const parseTimeoutProps = new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("Parse timeout")), 2000)
+            );
+            await Promise.race([parsePromise, parseTimeoutProps]);
+
+            console.log(`[MarkdownRenderer] Rendering ${id}`);
+            // Attempt 2: Render
+            const svgId = `svg-${id.replace(/[^a-zA-Z0-9-_]/g, '')}`;
+            const { svg } = await mermaid.render(svgId, code);
+
+            if (wrapper) {
+              wrapper.innerHTML = svg;
+              el.setAttribute('data-rendered', 'true');
+              if (loading) loading.style.display = 'none';
+              console.log(`[MarkdownRenderer] Success ${id}`);
+            }
+          } catch (err) {
+            console.error('[MarkdownRenderer] Failure:', id, err);
+            const errorMessage = err instanceof Error ? err.message : 'Unknown rendering error';
+
+            if (wrapper) {
+              wrapper.innerHTML = `
+                <div class="px-4 py-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-left">
+                  <p class="text-xs font-bold text-red-600 dark:text-red-400 mb-1">Diagram Rendering Failed</p>
+                  <p class="text-[10px] text-red-500 font-mono whitespace-pre-wrap">${errorMessage}</p>
+                  <pre class="mt-2 text-[10px] text-slate-500 bg-white dark:bg-slate-900 p-2 rounded border border-slate-200 dark:border-slate-700 overflow-x-auto">${code}</pre>
+                </div>
+              `;
+              el.setAttribute('data-rendered', 'error');
+              if (loading) loading.style.display = 'none';
+            }
+          }
+        }
+      } catch (globalErr) {
+        console.error("[MarkdownRenderer] Global error:", globalErr);
+      }
+    };
+
+    // Small delay to ensure DOM is painted and refs are populated
+    const timer = setTimeout(() => {
+      renderDiagrams();
+
+      // --- Process SMILES Diagrams ---
+      const smilesContainers = containerRef.current?.querySelectorAll('.smiles-wrapper');
+      smilesContainers?.forEach(wrapper => {
+        const el = wrapper as HTMLElement;
+        const id = el.id;
+        const smiles = el.getAttribute('data-smiles');
+        const canvasId = `canvas-${id}`;
+
+        if (!smiles) return;
+
+        // Dynamic import
+        import('smiles-drawer').then(SmilesDrawer => {
+          try {
+            const options = isDarkMode ? {
+              bondThickness: 0.6,
+              bondLength: 15,
+              shortBondLength: 0.8,
+              bondSpacing: 0.18,
+              atomVisualization: 'default',
+              isometric: true,
+              debug: false,
+              terminalCarbons: true,
+              explicitHydrogens: true,
+              overlapSensitivity: 0.42,
+              overlapResolutionIterations: 1,
+              compactDrawing: false,
+              fontSizeLarge: 5,
+              fontSizeSmall: 3,
+              padding: 2,
+              experimental: false,
+              themes: {
+                dark: {
+                  C: '#fff',
+                  O: '#e11d48',
+                  N: '#3b82f6',
+                  F: '#22c55e',
+                  CL: '#16a34a',
+                  BR: '#a855f7',
+                  I: '#a855f7',
+                  P: '#f97316',
+                  S: '#eab308',
+                  B: '#f59e0b',
+                  SI: '#f59e0b',
+                  H: '#fff',
+                  BACKGROUND: 'transparent'
+                }
+              }
+            } : {
+              terminalCarbons: true,
+              explicitHydrogens: true,
+              themes: {
+                light: {
+                  C: '#222',
+                  BACKGROUND: 'transparent'
+                }
+              }
+            };
+
+            const drawer = new SmilesDrawer.Drawer(options);
+
+            SmilesDrawer.parse(smiles, (tree: any) => {
+              drawer.draw(tree, canvasId, isDarkMode ? 'dark' : 'light', false);
+            }, (err: any) => {
+              console.error('SMILES Parse Error', err);
+            });
+          } catch (err) {
+            console.error('SMILES Draw Error', err);
+          }
+        }).catch(err => console.error('Failed to load SmilesDrawer', err));
+      });
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [html, isDarkMode]);
+
+  return <div
+    ref={containerRef}
+    className="prose prose-sm dark:prose-invert max-w-none"
+    dangerouslySetInnerHTML={{ __html: html }}
+    style={{ fontSize: '13px', lineHeight: '1.6' }}
+  />;
+};
+
+// --- Presentation Mode Component ---
+const PresentationView: React.FC<{
+  content: string;
+  onClose: () => void;
+  isDarkMode: boolean;
+}> = ({ content, onClose, isDarkMode }) => {
+  // Dynamically import framer-motion to avoid heavy bundle if not used
+  const [AnimatePresence, setAnimatePresence] = React.useState<any>(null);
+  const [motion, setMotion] = React.useState<any>(null);
+  const [currentSlide, setCurrentSlide] = React.useState(0);
+
+  // Load framer-motion on mount
+  React.useEffect(() => {
+    import('framer-motion').then(mod => {
+      // Handle both ES modules and CommonJS
+      const AnimatePresenceComponent = mod.AnimatePresence;
+      const motionComponent = mod.motion;
+
+      if (AnimatePresenceComponent && motionComponent) {
+        setAnimatePresence(() => AnimatePresenceComponent);
+        setMotion(() => motionComponent);
+      } else {
+        console.error('Failed to load framer-motion components', mod);
+      }
+    }).catch(err => console.error('Failed to load framer-motion', err));
+  }, []);
+
+  // Split content into slides
+  const slides = React.useMemo(() => {
+    return content
+      .split(/^---$/m) // Split by horizontal rule
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+  }, [content]);
+
+  // Keyboard navigation
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight' || e.key === 'Space') {
+        setCurrentSlide(prev => Math.min(prev + 1, slides.length - 1));
+      } else if (e.key === 'ArrowLeft') {
+        setCurrentSlide(prev => Math.max(prev - 1, 0));
+      } else if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [slides.length, onClose]);
+
+  if (!motion || !AnimatePresence) {
+    return (
+      <div className="fixed inset-0 z-[60] bg-white dark:bg-slate-900 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
+
+  const SlideMotion = motion.div;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-white dark:bg-slate-900 flex flex-col">
+      {/* Toolbar */}
+      <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800">
+        <div className="flex items-center gap-4">
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
+            ✕ Close
+          </button>
+          <span className="text-sm font-mono text-slate-500">
+            Slide {currentSlide + 1} / {slides.length}
+          </span>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setCurrentSlide(prev => Math.max(prev - 1, 0))}
+            disabled={currentSlide === 0}
+            className="px-4 py-2 bg-slate-100 dark:bg-slate-800 rounded-lg disabled:opacity-50"
+          >
+            ← Prev
+          </button>
+          <button
+            onClick={() => setCurrentSlide(prev => Math.min(prev + 1, slides.length - 1))}
+            disabled={currentSlide === slides.length - 1}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg disabled:opacity-50"
+          >
+            Next →
+          </button>
+        </div>
+      </div>
+
+      {/* Slide Content */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden relative p-8 md:p-16 flex items-center justify-center">
+        <AnimatePresence mode="wait">
+          <SlideMotion
+            key={currentSlide}
+            initial={{ opacity: 0, x: 50 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -50 }}
+            transition={{ duration: 0.3 }}
+            className="w-full max-w-4xl min-h-[50vh]"
+          >
+            <div className="prose prose-xl dark:prose-invert max-w-none slide-content">
+              {/* Render current slide */}
+              <MarkdownRenderer content={slides[currentSlide]} isDarkMode={isDarkMode} />
+            </div>
+          </SlideMotion>
+        </AnimatePresence>
+      </div>
+
+      {/* Progress Bar */}
+      <div className="h-1 bg-slate-100 dark:bg-slate-800">
+        <div
+          className="h-full bg-indigo-600 transition-all duration-300"
+          style={{ width: `${((currentSlide + 1) / slides.length) * 100}%` }}
+        />
+      </div>
+    </div>
+  );
+};
+
+
 const TeacherNotes: React.FC<{
   teacher: Teacher | null;
   teacherId: string;
@@ -901,6 +1418,32 @@ const TeacherNotes: React.FC<{
   const [showHistory, setShowHistory] = useState(false);
   const [correctionPrompt, setCorrectionPrompt] = useState('');
   const [isApplyingCorrection, setIsApplyingCorrection] = useState(false);
+  const [extractedPDFContent, setExtractedPDFContent] = useState<{ text: string; images: ExtractedImage[] } | null>(null);
+  const [isExtractingPDF, setIsExtractingPDF] = useState(false);
+  const [suggestedModuleTitle, setSuggestedModuleTitle] = useState('');
+  const [moduleTitle, setModuleTitle] = useState('');
+  const [allModuleNotes, setAllModuleNotes] = useState<GeneratedNote[]>([]);
+  const [expandedModules, setExpandedModules] = useState<{ [key: string]: boolean }>({});
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [isPresenting, setIsPresenting] = useState(false);
+
+  // Track dark mode changes
+  const [isDarkMode, setIsDarkMode] = useState(document.documentElement.classList.contains('dark'));
+
+  useEffect(() => {
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+          setIsDarkMode(document.documentElement.classList.contains('dark'));
+        }
+      });
+    });
+    observer.observe(document.documentElement, { attributes: true });
+    return () => observer.disconnect();
+  }, []);
+
+  // Initialize Mermaid
+
 
   if (!teacher) return null;
 
@@ -909,11 +1452,16 @@ const TeacherNotes: React.FC<{
     const loadLatestNote = async () => {
       if (!selectedClassId || !selectedSubjectId) {
         setLatestNote(null);
+        setAllModuleNotes([]);
         return;
       }
       try {
         const latest = await dbService.getLatestNote(adminId, selectedSubjectId, selectedClassId);
         setLatestNote(latest);
+
+        // Load all module notes
+        const allNotes = await dbService.getAllNotesForClassSubject(adminId, selectedSubjectId, selectedClassId);
+        setAllModuleNotes(allNotes);
       } catch (err) {
         console.log('Could not load latest note:', err);
       }
@@ -983,10 +1531,39 @@ const TeacherNotes: React.FC<{
     }
 
     setIsGeneratingEnhancedNote(true);
+    setIsExtractingPDF(true);
+
     try {
       const className = classNames[selectedClassId] || selectedClassId;
       const subjectName = subjectNames[selectedSubjectId] || selectedSubjectId;
-      
+
+      // Extract PDF content (text + images)
+      let extractedText = '';
+      let pageImages: Array<{ pageNumber: number; url: string }> = [];
+
+      try {
+        const allExtractedContent = await Promise.all(
+          noteBase64s.map(pdf => extractPDFContent(pdf, teacherId))
+        );
+
+        extractedText = allExtractedContent.map(c => c.text).join('\n\n');
+        pageImages = allExtractedContent.flatMap(c =>
+          c.images.map(img => ({ pageNumber: img.pageNumber, url: img.url }))
+        );
+
+        setExtractedPDFContent({
+          text: extractedText,
+          images: allExtractedContent.flatMap(c => c.images)
+        });
+
+        console.log(`Extracted ${pageImages.length} page images from PDF`);
+      } catch (err) {
+        console.error('PDF extraction failed:', err);
+        // Continue without extraction if it fails
+      }
+
+      setIsExtractingPDF(false);
+
       // Fetch previous corrections to learn from them
       let previousCorrectionsText = '';
       try {
@@ -1002,133 +1579,99 @@ const TeacherNotes: React.FC<{
         noteBase64s,
         { subjectName, className },
         notePrompt.trim() || undefined,
-        previousCorrectionsText || undefined
+        previousCorrectionsText || undefined,
+        extractedText || undefined,
+        pageImages.length > 0 ? pageImages : undefined
       );
-      setEnhancedNote(content);
-      setOriginalEnhancedNote(content); // Store original for comparison
-      
-      // Auto-save as a new note version
+
+      // Replace [IMAGE:page_X] markers with actual URLs
+      let processedContent = content;
+
+      console.log('Available page images:', pageImages.map(p => p.pageNumber));
+      console.log('Note content length:', content.length);
+
+      // Use a single comprehensive regex that captures any format
+      pageImages.forEach(img => {
+        const replacement = `![Page ${img.pageNumber} from textbook](${img.url})`;
+
+        // Match all variations: [IMAGE:page_1], [IMAGE:page 1], [Image:page1], etc.
+        // Case-insensitive, with or without underscore/space
+        const regex = new RegExp(`\\[IMAGE:page[_\\s]?${img.pageNumber}\\]`, 'gi');
+
+        const beforeCount = (processedContent.match(regex) || []).length;
+        processedContent = processedContent.replace(regex, replacement);
+        const afterCount = (processedContent.match(regex) || []).length;
+
+        if (beforeCount > 0) {
+          console.log(`Replaced ${beforeCount} occurrences of page ${img.pageNumber} image markers`);
+        }
+      });
+
+      setEnhancedNote(processedContent);
+      setOriginalEnhancedNote(processedContent);
+
+      // Extract module title from note content
       try {
-        const saved = await dbService.saveGeneratedNote(adminId, {
-          teacherId,
-          subjectId: selectedSubjectId,
-          classId: selectedClassId,
-          content,
-          isLatest: true
-        });
-        // Reload latest note
-        const latest = await dbService.getLatestNote(adminId, selectedSubjectId, selectedClassId);
-        setLatestNote(latest);
+        const extractedTitle = await extractModuleTitle(processedContent);
+        setSuggestedModuleTitle(extractedTitle);
+        setModuleTitle(extractedTitle);
       } catch (err) {
-        console.log('Note auto-save failed:', err);
+        console.error('Could not extract module title:', err);
+        setSuggestedModuleTitle('');
+        setModuleTitle('');
       }
+
+      // Don't auto-save yet - let teacher confirm/edit the title first
+
     } catch (err: any) {
-      alert('Failed to generate enhanced note: ' + err.message);
+      alert('Failed to generate note: ' + err.message);
     } finally {
       setIsGeneratingEnhancedNote(false);
+      setIsExtractingPDF(false);
     }
   };
 
-  const markdownToHtml = (markdown: string, isDarkMode: boolean = false): string => {
-    let html = markdown;
+  const handleSaveNoteWithTitle = async () => {
+    if (!enhancedNote || !moduleTitle.trim()) {
+      alert('Please provide a module title before saving.');
+      return;
+    }
 
-    const darkStyles = isDarkMode ? {
-      textColor: '#f3f4f6',
-      headingColor: '#ffffff',
-      codeBlockBg: '#374151',
-      codeBlockColor: '#f3f4f6',
-      inlineCodeBg: '#4b5563',
-      inlineCodeColor: '#f3f4f6',
-      quoteColor: '#d1d5db',
-      quoteBorder: '#9ca3af',
-      tableBorder: '#6b7280',
-      tableHeaderBg: '#374151',
-      tableRowBg1: 'transparent',
-      tableRowBg2: '#1f2937',
-      hrBorder: '#6b7280'
-    } : {
-      textColor: '#1f2937',
-      headingColor: '#111827',
-      codeBlockBg: '#f9fafb',
-      codeBlockColor: '#1f2937',
-      inlineCodeBg: '#e5e7eb',
-      inlineCodeColor: '#1f2937',
-      quoteColor: '#4b5563',
-      quoteBorder: '#d1d5db',
-      tableBorder: '#e5e7eb',
-      tableHeaderBg: '#f3f4f6',
-      tableRowBg1: '#ffffff',
-      tableRowBg2: '#f9fafb',
-      hrBorder: '#e5e7eb'
-    };
-
-    // Tables - MUST be processed before other replacements
-    html = html.replace(/\|(.+)\n\|[-\s:|]+\n((?:\|.+\n?)*)/g, (match) => {
-      const lines = match.trim().split('\n').filter(line => line.trim());
-      if (lines.length < 2) return match;
-
-      const headerRow = lines[0].split('|').map(cell => cell.trim()).filter(Boolean);
-      const bodyRows = lines.slice(2).map(line =>
-        line.split('|').map(cell => cell.trim()).filter(Boolean)
-      );
-
-      let table = `<table style="width: 100%; border-collapse: collapse; margin: 16px 0; border: 1px solid ${darkStyles.tableBorder};">`;
-      
-      // Header
-      table += `<thead><tr style="background-color: ${darkStyles.tableHeaderBg}; border: 1px solid ${darkStyles.tableBorder};">`;
-      headerRow.forEach(cell => {
-        table += `<th style="padding: 12px; text-align: left; font-weight: bold; border: 1px solid ${darkStyles.tableBorder}; color: ${darkStyles.headingColor};">${cell}</th>`;
-      });
-      table += '</tr></thead>';
-
-      // Body
-      table += '<tbody>';
-      bodyRows.forEach((row, idx) => {
-        table += `<tr style="background-color: ${idx % 2 === 0 ? darkStyles.tableRowBg1 : darkStyles.tableRowBg2}; border: 1px solid ${darkStyles.tableBorder};">`;
-        row.forEach(cell => {
-          table += `<td style="padding: 12px; border: 1px solid ${darkStyles.tableBorder}; color: ${darkStyles.textColor};">${cell}</td>`;
-        });
-        table += '</tr>';
-      });
-      table += '</tbody></table>';
-
-      return table;
-    });
-
-    html = html
-      // Headers
-      .replace(/^# (.*?)$/gm, `<h1 style="font-size: 2em; font-weight: bold; margin: 20px 0 10px; color: ${darkStyles.headingColor};">$1</h1>`)
-      .replace(/^## (.*?)$/gm, `<h2 style="font-size: 1.5em; font-weight: bold; margin: 16px 0 8px; color: ${darkStyles.headingColor};">$1</h2>`)
-      .replace(/^### (.*?)$/gm, `<h3 style="font-size: 1.2em; font-weight: bold; margin: 12px 0 6px; color: ${darkStyles.headingColor};">$1</h3>`)
-      // Bold
-      .replace(/\*\*(.*?)\*\*/g, `<strong style="font-weight: bold; color: ${darkStyles.textColor};">$1</strong>`)
-      // Italic
-      .replace(/\*(.*?)\*/g, `<em style="font-style: italic; color: ${darkStyles.textColor};">$1</em>`)
-      // Code blocks
-      .replace(/```([\s\S]*?)```/g, `<pre style="background: ${darkStyles.codeBlockBg}; color: ${darkStyles.codeBlockColor}; padding: 12px; border-radius: 4px; overflow-x: auto;"><code>$1</code></pre>`)
-      // Inline code
-      .replace(/`(.*?)`/g, `<code style="background: ${darkStyles.inlineCodeBg}; color: ${darkStyles.inlineCodeColor}; padding: 2px 6px; border-radius: 3px;">$1</code>`)
-      // Block quotes
-      .replace(/^> (.*?)$/gm, `<blockquote style="border-left: 4px solid ${darkStyles.quoteBorder}; padding-left: 12px; margin: 8px 0; color: ${darkStyles.quoteColor};">$1</blockquote>`)
-      // Horizontal rules
-      .replace(/^---$/gm, `<hr style="margin: 20px 0; border: none; border-top: 2px solid ${darkStyles.hrBorder};" />`)
-      // Lists (bullet points)
-      .replace(/^\- (.*?)$/gm, `<li style="margin-left: 20px; color: ${darkStyles.textColor};">$1</li>`)
-      // List wrapper
-      .replace(/(<li style="margin-left: 20px;.*?<\/li>)/s, (match) => {
-        return '<ul style="list-style: disc; margin: 8px 0;">' + match + '</ul>';
-      })
-      // Paragraphs
-      .replace(/\n\n/g, `</p><p style="margin: 12px 0; line-height: 1.6; color: ${darkStyles.textColor};">`)
-      .replace(/^(?!<[hp<])(.+)$/gm, (match) => {
-        if (match.trim() && !match.startsWith('<')) {
-          return `<p style="margin: 12px 0; line-height: 1.6; color: ${darkStyles.textColor};">${match}</p>`;
-        }
-        return match;
+    setIsSavingCorrections(true);
+    try {
+      const saved = await dbService.saveGeneratedNote(adminId, {
+        teacherId,
+        subjectId: selectedSubjectId,
+        classId: selectedClassId,
+        content: enhancedNote,
+        moduleTitle: moduleTitle.trim(),
+        isLatest: true,
+        groupId: editingGroupId || undefined
       });
 
-    return `<div style="font-family: Arial, sans-serif; line-height: 1.6; color: ${darkStyles.textColor}; overflow-x: auto;">${html}</div>`;
+      // Reload all module notes
+      const allNotes = await dbService.getAllNotesForClassSubject(adminId, selectedSubjectId, selectedClassId);
+      setAllModuleNotes(allNotes);
+      const latest = await dbService.getLatestNote(adminId, selectedSubjectId, selectedClassId);
+      setLatestNote(latest);
+
+      alert('Note saved successfully!');
+
+      // Reset form
+      setEnhancedNote(null);
+      setOriginalEnhancedNote(null);
+      setModuleTitle('');
+      setSuggestedModuleTitle('');
+
+    } catch (err: any) {
+      alert('Failed to save note: ' + err.message);
+    } finally {
+      setIsSavingCorrections(false);
+    }
   };
+
+
+
 
   const downloadAsPDF = async () => {
     if (!enhancedNote) return;
@@ -1172,13 +1715,13 @@ const TeacherNotes: React.FC<{
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
     const selected = enhancedNote.substring(start, end) || placeholder;
-    const newContent = 
-      enhancedNote.substring(0, start) + 
-      before + selected + after + 
+    const newContent =
+      enhancedNote.substring(0, start) +
+      before + selected + after +
       enhancedNote.substring(end);
-    
+
     setEnhancedNote(newContent);
-    
+
     // Move cursor to after inserted text
     setTimeout(() => {
       textarea.focus();
@@ -1236,16 +1779,19 @@ const TeacherNotes: React.FC<{
         subjectId: selectedSubjectId,
         classId: selectedClassId,
         content: enhancedNote,
+        moduleTitle: moduleTitle || suggestedModuleTitle || 'Updated Note',
         isLatest: true
       });
 
       alert('✅ Corrections saved! AI will learn from your feedback on future notes.');
       setEnhancedNote(null);
       setOriginalEnhancedNote(null);
-      
-      // Reload latest note
+
+      // Reload latest note and all modules
       const latest = await dbService.getLatestNote(adminId, selectedSubjectId, selectedClassId);
       setLatestNote(latest);
+      const allNotes = await dbService.getAllNotesForClassSubject(adminId, selectedSubjectId, selectedClassId);
+      setAllModuleNotes(allNotes);
     } catch (err: any) {
       alert('Failed to save corrections: ' + err.message);
     } finally {
@@ -1288,6 +1834,112 @@ const TeacherNotes: React.FC<{
         <p className="text-slate-500 font-medium">Upload your teaching notes to generate draft assignments by section.</p>
       </div>
 
+      {/* All Module Notes - Collapsible */}
+      {allModuleNotes.length > 0 && (
+        <div className="bg-white dark:bg-slate-800 rounded-[2rem] p-8 border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-2xl font-black text-slate-800 dark:text-white">📚 All Module Notes</h3>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                {allModuleNotes.length} module{allModuleNotes.length !== 1 ? 's' : ''} for {classNames[selectedClassId]} - {subjectNames[selectedSubjectId]}
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {allModuleNotes.map((note) => {
+              const isExpanded = expandedModules[note.id];
+
+              return (
+                <div key={note.id} className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden">
+                  <div className="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                    <button
+                      onClick={() => setExpandedModules(prev => ({ ...prev, [note.id]: !prev[note.id] }))}
+                      className="flex-1 flex items-center gap-4 text-left"
+                    >
+                      <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-900/40 flex items-center justify-center">
+                        <span className="text-xl">📖</span>
+                      </div>
+                      <div>
+                        <h4 className="text-lg font-bold text-slate-800 dark:text-white">{note.moduleTitle}</h4>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          Updated {new Date(note.updatedAt).toLocaleDateString()}
+                        </p>
+                      </div>
+                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEnhancedNote(note.content);
+                          setOriginalEnhancedNote(note.content);
+                          setModuleTitle(note.moduleTitle);
+                          setSuggestedModuleTitle(note.moduleTitle);
+                          setEditingGroupId(note.groupId || note.id);
+                          setTimeout(() => {
+                            document.getElementById('enhanced-note-editor')?.scrollIntoView({ behavior: 'smooth' });
+                          }, 100);
+                        }}
+                        className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all"
+                      >
+                        ✏️ Edit
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEnhancedNote(note.content);
+                          setOriginalEnhancedNote(note.content); // Needed for correct displaying
+                          setModuleTitle(note.moduleTitle);
+                          setIsPresenting(true);
+                        }}
+                        className="px-3 py-1 rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-700 text-xs font-bold transition-all"
+                        title="Present Note"
+                      >
+                        📽️
+                      </button>
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (confirm('Are you sure you want to delete this note? This action cannot be undone.')) {
+                            try {
+                              await dbService.deleteGeneratedNote(adminId, note.id, note.groupId);
+                              setAllModuleNotes(prev => prev.filter(n => n.id !== note.id));
+                              // Also clear if it's the currently viewed latest note
+                              if (latestNote?.id === note.id) {
+                                setLatestNote(null);
+                              }
+                            } catch (err) {
+                              alert('Failed to delete note');
+                            }
+                          }
+                        }}
+                        className="px-3 py-1 rounded-lg bg-red-100 hover:bg-red-200 text-red-600 text-xs font-bold transition-all"
+                        title="Delete Note"
+                      >
+                        🗑️
+                      </button>
+                      <button
+                        onClick={() => setExpandedModules(prev => ({ ...prev, [note.id]: !prev[note.id] }))}
+                        className="text-2xl transition-transform"
+                        style={{ transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                      >
+                        ⌄
+                      </button>
+                    </div>
+                  </div>
+
+                  {isExpanded && (
+                    <div className="px-6 py-4 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40">
+                      <MarkdownRenderer content={note.content} isDarkMode={isDarkMode} />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {latestNote && (
         <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-[2rem] p-8 border border-blue-200 dark:border-blue-700/50 shadow-sm space-y-4">
           <div className="flex items-center justify-between mb-4">
@@ -1309,14 +1961,7 @@ const TeacherNotes: React.FC<{
           </div>
 
           <div className="bg-white dark:bg-slate-800 rounded-xl p-6 max-h-[300px] overflow-y-auto border border-blue-100 dark:border-blue-700/30">
-            <div 
-              className="prose prose-sm dark:prose-invert max-w-none"
-              dangerouslySetInnerHTML={{ __html: markdownToHtml(latestNote.content, document.documentElement.classList.contains('dark')) }}
-              style={{
-                fontSize: '13px',
-                lineHeight: '1.6'
-              }}
-            />
+            <MarkdownRenderer content={latestNote.content} isDarkMode={isDarkMode} />
           </div>
 
           <div className="flex gap-3">
@@ -1325,6 +1970,7 @@ const TeacherNotes: React.FC<{
                 if (latestNote) {
                   setEnhancedNote(latestNote.content);
                   setOriginalEnhancedNote(latestNote.content);
+                  setEditingGroupId(latestNote.groupId || latestNote.id);
                   // Scroll to editing section
                   setTimeout(() => {
                     document.getElementById('enhanced-note-editor')?.scrollIntoView({ behavior: 'smooth' });
@@ -1414,10 +2060,10 @@ const TeacherNotes: React.FC<{
           </button>
           <button
             onClick={handleGenerateEnhancedNote}
-            disabled={isGeneratingEnhancedNote}
+            disabled={isGeneratingEnhancedNote || isExtractingPDF}
             className="px-6 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black shadow-lg shadow-emerald-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
           >
-            {isGeneratingEnhancedNote ? 'Generating...' : 'Create Enhanced Note'}
+            {isExtractingPDF ? '📄 Extracting PDF...' : isGeneratingEnhancedNote ? '🤖 Generating...' : '✨ Create Enhanced Note'}
           </button>
           <button
             onClick={() => {
@@ -1426,6 +2072,7 @@ const TeacherNotes: React.FC<{
               setSummary('');
               setEnhancedNote(null);
               setNotePrompt('');
+              setEditingGroupId(null);
             }}
             className="px-6 py-3 rounded-2xl bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold transition-all"
           >
@@ -1542,14 +2189,49 @@ const TeacherNotes: React.FC<{
               <h3 className="text-2xl font-black">📖 Enhanced Study Note</h3>
               <p className="text-sm text-slate-500 mt-1">Review and edit. Changes will help AI improve future notes.</p>
             </div>
-            <button
-              onClick={downloadAsPDF}
-              className="px-6 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black shadow-lg shadow-blue-100 dark:shadow-none transition-all active:scale-95"
-              title="Download as PDF"
-            >
-              📥 Download PDF
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setIsPresenting(true)}
+                className="px-6 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-black shadow-lg shadow-indigo-100 dark:shadow-none transition-all active:scale-95"
+                title="Start Presentation"
+              >
+                📽️ Present
+              </button>
+              <button
+                onClick={downloadAsPDF}
+                className="px-6 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black shadow-lg shadow-blue-100 dark:shadow-none transition-all active:scale-95"
+                title="Download as PDF"
+              >
+                📥 Download PDF
+              </button>
+            </div>
           </div>
+
+          {/* Module Title Input */}
+          {suggestedModuleTitle && (
+            <div className="bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 rounded-2xl p-6 border-2 border-purple-200 dark:border-purple-700/50 space-y-4">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xl">🏷️</span>
+                <h4 className="text-lg font-black text-purple-900 dark:text-purple-200">Module Title</h4>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase text-purple-700 dark:text-purple-300 tracking-widest ml-1">
+                  AI-Suggested Title (You can edit)
+                </label>
+                <input
+                  type="text"
+                  value={moduleTitle}
+                  onChange={e => setModuleTitle(e.target.value)}
+                  placeholder="e.g., Module 1: Introduction to Physics"
+                  className="input-style"
+                />
+                <p className="text-xs text-purple-700 dark:text-purple-300 font-medium">
+                  💡 AI suggested: "{suggestedModuleTitle}"
+                </p>
+              </div>
+            </div>
+          )}
 
           <div className="space-y-6">
             {enhancedNote !== originalEnhancedNote && (
@@ -1558,10 +2240,7 @@ const TeacherNotes: React.FC<{
               </div>
             )}
 
-            <div 
-              className="prose prose-slate dark:prose-invert max-w-none"
-              dangerouslySetInnerHTML={{ __html: markdownToHtml(enhancedNote, document.documentElement.classList.contains('dark')) }}
-            />
+            <MarkdownRenderer content={enhancedNote} isDarkMode={isDarkMode} />
           </div>
 
           {/* AI-Powered Correction Prompt */}
@@ -1570,7 +2249,7 @@ const TeacherNotes: React.FC<{
               <span className="text-xl">🤖</span>
               <h4 className="text-lg font-black text-blue-900 dark:text-blue-200">AI-Powered Corrections</h4>
             </div>
-            
+
             <div className="space-y-2">
               <label className="text-[10px] font-black uppercase text-blue-700 dark:text-blue-300 tracking-widest ml-1">
                 Give AI a specific instruction
@@ -1604,9 +2283,17 @@ const TeacherNotes: React.FC<{
 
           <div className="flex gap-3 flex-wrap">
             <button
-              onClick={handleSaveWithLearning}
-              disabled={isSavingCorrections || enhancedNote === originalEnhancedNote}
+              onClick={handleSaveNoteWithTitle}
+              disabled={isSavingCorrections || !moduleTitle.trim()}
               className="px-6 py-3 rounded-2xl bg-green-600 hover:bg-green-700 text-white font-black shadow-lg shadow-green-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
+              title="Save note with module title"
+            >
+              {isSavingCorrections ? 'Saving...' : '💾 Save Note'}
+            </button>
+            <button
+              onClick={handleSaveWithLearning}
+              disabled={isSavingCorrections || enhancedNote === originalEnhancedNote || !moduleTitle.trim()}
+              className="px-6 py-3 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white font-black shadow-lg shadow-purple-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
               title="Save corrections and learn from them"
             >
               {isSavingCorrections ? 'Learning...' : '🧠 Save & Learn'}
@@ -1614,14 +2301,16 @@ const TeacherNotes: React.FC<{
             <button
               onClick={downloadAsPDF}
               className="px-6 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black shadow-lg shadow-blue-100 dark:shadow-none transition-all active:scale-95"
-              title="Download without saving corrections"
+              title="Download as PDF"
             >
-              💾 Save as PDF
+              📥 Download PDF
             </button>
             <button
               onClick={() => {
                 setEnhancedNote(null);
                 setOriginalEnhancedNote(null);
+                setModuleTitle('');
+                setSuggestedModuleTitle('');
               }}
               className="px-6 py-3 rounded-2xl bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold transition-all"
             >
@@ -1652,11 +2341,10 @@ const TeacherNotes: React.FC<{
               {noteHistory.map((note, idx) => (
                 <div
                   key={note.id}
-                  className={`p-6 rounded-2xl border-2 transition-all cursor-pointer ${
-                    note.isLatest
-                      ? 'bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-700'
-                      : 'bg-slate-50 dark:bg-slate-700/40 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
-                  }`}
+                  className={`p-6 rounded-2xl border-2 transition-all cursor-pointer ${note.isLatest
+                    ? 'bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-700'
+                    : 'bg-slate-50 dark:bg-slate-700/40 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
+                    }`}
                   onClick={() => {
                     setEnhancedNote(note.content);
                     setOriginalEnhancedNote(note.content);
@@ -1689,6 +2377,14 @@ const TeacherNotes: React.FC<{
             Close History
           </button>
         </div>
+      )}
+      {/* Presentation Mode Overlay */}
+      {isPresenting && enhancedNote && (
+        <PresentationView
+          content={enhancedNote}
+          onClose={() => setIsPresenting(false)}
+          isDarkMode={isDarkMode}
+        />
       )}
     </div>
   );

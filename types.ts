@@ -106,9 +106,11 @@ export interface GeneratedNote {
   subjectId: string;
   classId: string;
   content: string;
+  moduleTitle: string; // Module name/number (e.g., "Module 1: Introduction to Physics")
   createdAt: number;
   updatedAt: number;
   isLatest: boolean;
+  groupId?: string; // ID of the first note in this series (for versioning)
 }
 
 export interface NoteCorrection {

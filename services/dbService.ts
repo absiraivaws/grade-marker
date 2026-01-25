@@ -362,18 +362,25 @@ export const dbService = {
 
   // --- Generated Notes (Persistent Note Storage) ---
   async saveGeneratedNote(adminId: string, note: Omit<GeneratedNote, 'id' | 'createdAt' | 'updatedAt'>) {
-    // If this is a new latest note for this subject/class, mark old ones as not latest
-    const q = query(
-      getNestedColl(adminId, 'generatedNotes'),
-      where('subjectId', '==', note.subjectId),
-      where('classId', '==', note.classId),
-      where('isLatest', '==', true)
-    );
-    const snap = await getDocs(q);
-    
-    // Mark previous latest as not latest
-    for (const doc of snap.docs) {
-      await updateDoc(doc.ref, { isLatest: false });
+    // If a groupId is provided, we only mark previous versions in THIS group as not latest.
+    const noteGroupId = note.groupId || `group-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    if (note.groupId) {
+      const q = query(
+        getNestedColl(adminId, 'generatedNotes'),
+        where('groupId', '==', note.groupId),
+        where('isLatest', '==', true)
+      );
+      const snap = await getDocs(q);
+
+      // Mark previous latest version of THIS note as not latest
+      for (const doc of snap.docs) {
+        await updateDoc(doc.ref, { isLatest: false });
+      }
+    } else {
+      // Legacy behavior: If no groupId was provided (shouldn't happen with new logic, but safe fallback),
+      // we DON'T mark anything as not latest to avoid hiding other unrelated notes.
+      // Or we can try to infer, but safest is to just start a new group.
     }
 
     // Save new note as latest
@@ -381,9 +388,29 @@ export const dbService = {
       ...note,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
-      isLatest: true
+      isLatest: true,
+      groupId: noteGroupId
     });
     return docRef.id;
+  },
+
+  async deleteGeneratedNote(adminId: string, noteId: string, groupId?: string) {
+    // 1. Delete the specific note document
+    await deleteDoc(doc(getNestedColl(adminId, 'generatedNotes'), noteId));
+
+    // 2. If a groupId provided, we might want to clean up all related notes (simple version: delete all in group)
+    // The user requirement "delete notes" usually implies deleting the 'item' from the list.
+    // If we only delete the latest, the old versions might pop up if we don't handle it.
+    // Let's query and delete ALL notes in this group to be safe and clean.
+    if (groupId) {
+      const q = query(
+        getNestedColl(adminId, 'generatedNotes'),
+        where('groupId', '==', groupId)
+      );
+      const snap = await getDocs(q);
+      const deletePromises = snap.docs.map(d => deleteDoc(d.ref));
+      await Promise.all(deletePromises);
+    }
   },
 
   async getLatestNote(adminId: string, subjectId: string, classId: string): Promise<GeneratedNote | null> {
@@ -395,7 +422,7 @@ export const dbService = {
     );
     const snap = await getDocs(q);
     if (snap.empty) return null;
-    
+
     const data = snap.docs[0].data();
     return {
       ...data,
@@ -422,5 +449,25 @@ export const dbService = {
       })
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, limit);
+  },
+
+  async getAllNotesForClassSubject(adminId: string, subjectId: string, classId: string): Promise<GeneratedNote[]> {
+    const q = query(
+      getNestedColl(adminId, 'generatedNotes'),
+      where('subjectId', '==', subjectId),
+      where('classId', '==', classId)
+    );
+    const snap = await getDocs(q);
+    return snap.docs
+      .map(d => {
+        const data = d.data();
+        return {
+          id: d.id,
+          ...data,
+          createdAt: data.createdAt?.toMillis?.() || Date.now(),
+          updatedAt: data.updatedAt?.toMillis?.() || Date.now()
+        } as GeneratedNote;
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 };
