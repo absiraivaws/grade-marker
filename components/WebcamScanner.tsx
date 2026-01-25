@@ -5,9 +5,22 @@ interface WebcamScannerProps {
   onCapture: (imageData: string) => void;
   onClose: () => void;
   isActive: boolean;
+  // New props for Identify-Confirm flow
+  isProcessing?: boolean;
+  scanResult?: { studentName: string | null, confidence: string } | null;
+  onScanConfirm?: () => void;
+  onScanCancel?: () => void; // Clears result/processing
 }
 
-export const WebcamScanner: React.FC<WebcamScannerProps> = ({ onCapture, onClose, isActive }) => {
+export const WebcamScanner: React.FC<WebcamScannerProps> = ({
+  onCapture,
+  onClose,
+  isActive,
+  isProcessing,
+  scanResult,
+  onScanConfirm,
+  onScanCancel
+}) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Use ref to track stream so we don't restart effect when stream state changes
@@ -120,11 +133,27 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({ onCapture, onClose
 
   const handleRetake = () => {
     setCapturedImage(null);
+    if (onScanCancel) onScanCancel();
   };
 
   const handleConfirm = () => {
     if (capturedImage) {
       onCapture(capturedImage);
+      // Do NOT clear capturedImage yet if we are waiting for ID result
+      // But if no isProcessing/scanResult logic is used (legacy), we might want to?
+      // For this workflow, parent sets isProcessing=true immediately?
+      // Actually, let's keep capturedImage until explicit confirm or reset.
+      // If we are NOT in async mode (no isProcessing passed), behave as before.
+      if (isProcessing === undefined && scanResult === undefined) {
+        setCapturedImage(null);
+      }
+    }
+  };
+
+  const handleFinalConfirm = () => {
+    if (onScanConfirm) {
+      onScanConfirm();
+      // NOW we reset
       setCapturedImage(null);
     }
   };
@@ -142,6 +171,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({ onCapture, onClose
               className="bg-black/50 text-white text-sm py-2 px-4 rounded-full backdrop-blur-md border border-white/20 outline-none hover:bg-black/70 transition-all appearance-none cursor-pointer"
               value={selectedDeviceId}
               onChange={(e) => setSelectedDeviceId(e.target.value)}
+              disabled={!!capturedImage}
             >
               <option value="">Default Camera</option>
               {devices.map((d, i) => (
@@ -194,7 +224,49 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({ onCapture, onClose
                   </div>
                 </>
               ) : (
-                <img src={capturedImage} alt="Captured" className="w-full h-full object-contain bg-black" />
+                <div className="relative w-full h-full">
+                  <img src={capturedImage} alt="Captured" className="w-full h-full object-contain bg-black" />
+
+                  {/* Processing Overlay */}
+                  {isProcessing && (
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center z-50">
+                      <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                      <p className="text-white font-bold text-lg animate-pulse">Identifying Student...</p>
+                    </div>
+                  )}
+
+                  {/* Result Overlay */}
+                  {!isProcessing && scanResult && (
+                    <div className="absolute inset-0 bg-black/80 backdrop-blur-md flex flex-col items-center justify-center z-50 p-6 animate-in zoom-in duration-300">
+                      <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl max-w-sm w-full shadow-2xl text-center space-y-6">
+                        <div className="mx-auto w-20 h-20 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center">
+                          <Check className="w-10 h-10 text-green-600 dark:text-green-400" />
+                        </div>
+                        <div>
+                          <h3 className="text-slate-500 dark:text-slate-400 text-sm font-bold uppercase tracking-wider mb-2">Identified Student</h3>
+                          <p className="text-3xl font-black text-slate-800 dark:text-white leading-tight">
+                            {scanResult.studentName || 'Unknown Student'}
+                          </p>
+                          <p className="text-slate-400 text-xs mt-2">Confidence: {scanResult.confidence}</p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4 pt-4 border-t border-slate-100 dark:border-slate-700">
+                          <button
+                            onClick={handleRetake}
+                            className="py-3 px-4 rounded-xl font-bold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                          >
+                            Try Again
+                          </button>
+                          <button
+                            onClick={handleFinalConfirm}
+                            className="py-3 px-4 rounded-xl font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-200 dark:shadow-none transition-all hover:scale-105 active:scale-95"
+                          >
+                            Confirm & Grade
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
 
@@ -203,39 +275,41 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({ onCapture, onClose
               {debugLog.split('\n').slice(-1)[0]}
             </div>
 
-            {/* Bottom Controls */}
-            <div className="absolute bottom-8 left-0 right-0 flex justify-center items-center gap-12 z-50">
-              {!capturedImage ? (
-                <button
-                  onClick={handleCapture}
-                  className="w-24 h-24 rounded-full bg-white/20 backdrop-blur-sm border-4 border-white shadow-xl hover:scale-105 active:scale-95 transition-all flex items-center justify-center"
-                >
-                  <div className="w-20 h-20 rounded-full bg-red-600 border-2 border-white/50 shadow-inner"></div>
-                </button>
-              ) : (
-                <>
+            {/* Bottom Controls - Hide when processing or showing result */}
+            {!isProcessing && !scanResult && (
+              <div className="absolute bottom-8 left-0 right-0 flex justify-center items-center gap-12 z-50">
+                {!capturedImage ? (
                   <button
-                    onClick={handleRetake}
-                    className="flex flex-col items-center text-white gap-2 hover:opacity-80 transition-opacity"
+                    onClick={handleCapture}
+                    className="w-24 h-24 rounded-full bg-white/20 backdrop-blur-sm border-4 border-white shadow-xl hover:scale-105 active:scale-95 transition-all flex items-center justify-center"
                   >
-                    <div className="p-4 bg-gray-800/80 rounded-full backdrop-blur-md border border-white/10">
-                      <RefreshCw className="w-8 h-8" />
-                    </div>
-                    <span className="text-xs font-bold uppercase tracking-wider shadow-black drop-shadow-md">Retake</span>
+                    <div className="w-20 h-20 rounded-full bg-red-600 border-2 border-white/50 shadow-inner"></div>
                   </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={handleRetake}
+                      className="flex flex-col items-center text-white gap-2 hover:opacity-80 transition-opacity"
+                    >
+                      <div className="p-4 bg-gray-800/80 rounded-full backdrop-blur-md border border-white/10">
+                        <RefreshCw className="w-8 h-8" />
+                      </div>
+                      <span className="text-xs font-bold uppercase tracking-wider shadow-black drop-shadow-md">Retake</span>
+                    </button>
 
-                  <button
-                    onClick={handleConfirm}
-                    className="flex flex-col items-center text-white gap-2 hover:opacity-80 transition-opacity"
-                  >
-                    <div className="p-4 bg-green-600 rounded-full backdrop-blur-md shadow-lg shadow-green-900/50 border border-white/20">
-                      <Check className="w-8 h-8" />
-                    </div>
-                    <span className="text-xs font-bold uppercase tracking-wider shadow-black drop-shadow-md">Use Photo</span>
-                  </button>
-                </>
-              )}
-            </div>
+                    <button
+                      onClick={handleConfirm}
+                      className="flex flex-col items-center text-white gap-2 hover:opacity-80 transition-opacity"
+                    >
+                      <div className="p-4 bg-green-600 rounded-full backdrop-blur-md shadow-lg shadow-green-900/50 border border-white/20">
+                        <Check className="w-8 h-8" />
+                      </div>
+                      <span className="text-xs font-bold uppercase tracking-wider shadow-black drop-shadow-md">Identify</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
 
             <canvas ref={canvasRef} className="hidden" />
           </>

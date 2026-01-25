@@ -156,9 +156,21 @@ const StudentDashboard: React.FC<Props> = ({ studentId, adminId, classId }) => {
                         <p className="text-4xl font-black text-indigo-600">{sub.score} <span className="text-sm opacity-40">/ {sub.maxScore}</span></p>
                       </div>
                     </div>
-                    <div className="bg-indigo-50/50 dark:bg-indigo-950/30 p-6 rounded-3xl border border-indigo-100 dark:border-indigo-900/40 italic text-indigo-800 dark:text-indigo-300 font-medium mb-6 relative">
-                      <div className="absolute -top-3 left-6 px-2 bg-white dark:bg-slate-800 text-[10px] font-black text-indigo-400 uppercase tracking-tighter">AI Feedback</div>
-                      "{sub.feedback}"
+                    <div className="mb-6">
+                      {sub.studentAnswerImages && sub.studentAnswerImages.length > 0 ? (
+                        <div className="rounded-3xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-black">
+                          <img
+                            src={sub.studentAnswerImages[0]}
+                            alt="Your Answer"
+                            className="w-full h-auto max-h-[400px] object-contain mx-auto"
+                          />
+                        </div>
+                      ) : (
+                        <div className="bg-indigo-50/50 dark:bg-indigo-950/30 p-6 rounded-3xl border border-indigo-100 dark:border-indigo-900/40 italic text-indigo-800 dark:text-indigo-300 font-medium relative">
+                          <div className="absolute -top-3 left-6 px-2 bg-white dark:bg-slate-800 text-[10px] font-black text-indigo-400 uppercase tracking-tighter">AI Feedback</div>
+                          "{sub.feedback}"
+                        </div>
+                      )}
                     </div>
                     <div className="space-y-3 px-2">
                       {a.markingPoints.map((mp, i) => {

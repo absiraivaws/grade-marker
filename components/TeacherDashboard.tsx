@@ -41,8 +41,7 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
   const [classNames, setClassNames] = useState<{ [key: string]: string }>({});
   const [subjectNames, setSubjectNames] = useState<{ [key: string]: string }>({});
   const [classData, setClassData] = useState<{ [key: string]: Class }>({});
-  const [isScanning, setIsScanning] = useState(false);
-  const [scanningAssignment, setScanningAssignment] = useState<Assignment | null>(null);
+
 
   // Load Teacher Profile & Names
   useEffect(() => {
@@ -230,78 +229,136 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
   const drafts = assignments.filter(a => a.status === 'DRAFT');
   const published = assignments.filter(a => a.status === 'PUBLISHED');
 
+  // Scanning State
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanningAssignment, setScanningAssignment] = useState<Assignment | null>(null);
+
+  // Async Scan Flow State
+  const [scanProcessing, setScanProcessing] = useState(false);
+  const [scanResult, setScanResult] = useState<{ studentName: string | null, confidence: string } | null>(null);
+  const [pendingScanImage, setPendingScanImage] = useState<string | null>(null);
+
+  // Background Processing Queue
+  type QueueItem = {
+    id: string;
+    studentName: string;
+    status: 'uploading' | 'grading' | 'success' | 'error';
+    timestamp: number;
+    error?: string;
+  };
+  const [processingQueue, setProcessingQueue] = useState<QueueItem[]>([]);
+
+  // ... (previous effects)
+
   const handleScanStart = (assignment: Assignment) => {
     setScanningAssignment(assignment);
     setIsScanning(true);
+    setScanResult(null);
+    setScanProcessing(false);
   };
-
-
 
   const handleScanCapture = async (imageData: string) => {
     if (!scanningAssignment) return;
+    setScanProcessing(true);
 
     try {
-      // 0. Compress Image to avoid "Failed to fetch" (payload too large)
       const compressedImage = await compressImage(imageData);
-      console.log("Original size:", imageData.length, "Compressed size:", compressedImage.length);
+      setPendingScanImage(compressedImage); // Store for next step
 
-      // 1. Identify Student
       const students = await dbService.getStudentsByClass(adminId, scanningAssignment.classId);
       const studentNames = students.map(s => s.name);
 
       const identification = await identifyStudentName(compressedImage, studentNames);
+      setScanResult(identification);
 
-      let matchedStudent = students.find(s => s.name === identification.studentName);
+    } catch (err: any) {
+      alert("Error identifying: " + err.message);
+      setScanProcessing(false);
+    } finally {
+      setScanProcessing(false);
+    }
+  };
 
+  const handleScanCancel = () => {
+    setScanResult(null);
+    setPendingScanImage(null);
+    setScanProcessing(false);
+  };
+
+  const handleScanConfirm = async () => {
+    if (!scanningAssignment || !scanResult || !pendingScanImage) return;
+
+    const queueId = Date.now().toString();
+    const studentName = scanResult.studentName || "Unknown Student";
+
+    // 1. Add to Queue
+    setProcessingQueue(prev => [{
+      id: queueId,
+      studentName,
+      status: 'uploading',
+      timestamp: Date.now()
+    }, ...prev]);
+
+    // 2. Start Background Job
+    processSubmissionInBackground(queueId, pendingScanImage, scanResult.studentName, scanningAssignment);
+
+    // 3. Reset UI immediately for next scan
+    setScanResult(null);
+    setPendingScanImage(null);
+    // scanProcessing is already false
+  };
+
+  const processSubmissionInBackground = async (queueId: string, imageData: string, identifiedName: string | null, assignment: Assignment) => {
+    try {
+      const students = await dbService.getStudentsByClass(adminId, assignment.classId);
+      let matchedStudent = students.find(s => s.name === identifiedName);
+
+      // If not matched, we might still proceed but as "Unknown"? 
+      // For now assume matched (verified by user in UI)
       if (!matchedStudent) {
-        // Fallback or retry?
-        alert(`Could not automatically identify student (Confidence: ${identification.confidence}). Please check the name manually.`);
-        return;
+        // Fallback for logic safety
+        matchedStudent = { id: 'unknown', name: identifiedName || 'Unknown' } as any;
       }
 
-      const confirmed = window.confirm(`Identified Student: ${matchedStudent.name}\nConfidence: ${identification.confidence}\n\nProceed with grading?`);
-      if (!confirmed) return;
+      // Update Queue: Grading
+      setProcessingQueue(prev => prev.map(i => i.id === queueId ? { ...i, status: 'grading' } : i));
 
-      // 2. Upload Student Image (We use the compressed one to be faster)
-      const studentImgUrl = await uploadBase64ToStorage(compressedImage, teacherId, `scan_${matchedStudent.id}_${Date.now()}`);
+      // Upload
+      const studentImgUrl = await uploadBase64ToStorage(imageData, teacherId, `scan_${matchedStudent?.id}_${Date.now()}`);
 
-      // 3. Auto-Grade using Gemini
-      // Ensure we have teacher reference images. If base64 is missing, we might need to rely on URLs if supported,
-      // but analyzeAnswer expects base64 currently for "inlineData".
-      // If teacherAnswerImagesBase64 is empty, we warn.
-      if (!scanningAssignment.teacherAnswerImagesBase64 || scanningAssignment.teacherAnswerImagesBase64.length === 0) {
-        alert("Warning: This assignment doesn't have reference images loaded for AI. Grading might be less accurate.");
-      }
+      // Grade
+      // If teacherAnswerImagesBase64 is empty, we warn? (Skip warning in background, just do best effors)
+      const aiResult = await analyzeAnswer(assignment, [imageData]);
 
-      // Use compressed image for AI analysis too
-      const aiResult = await analyzeAnswer(scanningAssignment, [compressedImage]);
-
-      // 4. Save Submission
+      // Save
       const submission: Submission = {
         id: crypto.randomUUID(),
-        assignmentId: scanningAssignment.id,
-        studentId: matchedStudent.id,
-        studentName: matchedStudent.name,
+        assignmentId: assignment.id,
+        studentId: matchedStudent!.id,
+        studentName: matchedStudent!.name,
         studentAnswerImages: [studentImgUrl],
         studentAnswerImagesBase64: [imageData],
         feedback: aiResult.feedback,
         score: aiResult.score,
         maxScore: aiResult.totalPossible,
-        criteriaScores: aiResult.criteriasMet.map(met => met ? 1 : 0), // simplified
+        criteriaScores: aiResult.criteriasMet.map(met => met ? 1 : 0),
         criteriasMet: aiResult.criteriasMet,
         gradedAt: Date.now()
       };
 
       await dbService.saveSubmission(adminId, submission);
 
-      alert(`✅ Graded! Score: ${aiResult.score}/${aiResult.totalPossible}\nFeedback: ${aiResult.feedback}`);
+      // Success
+      setProcessingQueue(prev => prev.map(i => i.id === queueId ? { ...i, status: 'success' } : i));
 
-      // Refresh submissions list if needed
-      // setSubmissions... (optional, or just rely on next fetch)
+      // Remove from queue after 5 seconds to clean up?
+      setTimeout(() => {
+        setProcessingQueue(prev => prev.filter(i => i.id !== queueId));
+      }, 8000);
 
     } catch (err: any) {
-      console.error("Scan error:", err);
-      alert("Error during scanning/grading: " + err.message);
+      console.error("Background processing failed", err);
+      setProcessingQueue(prev => prev.map(i => i.id === queueId ? { ...i, status: 'error', error: err.message } : i));
     }
   };
 
@@ -312,8 +369,37 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
         isActive={isScanning}
         onClose={() => setIsScanning(false)}
         onCapture={handleScanCapture}
+        isProcessing={scanProcessing}
+        scanResult={scanResult}
+        onScanConfirm={handleScanConfirm}
+        onScanCancel={handleScanCancel}
       />
 
+      {/* Processing Queue Overlay (Visible Global) */}
+      <div className="fixed bottom-4 right-4 z-[110] flex flex-col gap-2 pointer-events-none">
+        {processingQueue.map(item => (
+          <div key={item.id} className="bg-white dark:bg-slate-800 p-3 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 flex items-center gap-3 animate-in slide-in-from-right duration-300 w-72 pointer-events-auto">
+            <div className="relative">
+              {item.status === 'uploading' && <div className="w-8 h-8 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></div>}
+              {item.status === 'grading' && <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center animate-pulse"><img src="/ai-icon.png" className="w-4 h-4" alt="AI" onError={(e) => (e.currentTarget.style.display = 'none')} />✨</div>}
+              {item.status === 'success' && <div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center"><CheckCircle className="w-5 h-5" /></div>}
+              {item.status === 'error' && <div className="w-8 h-8 rounded-full bg-red-100 text-red-600 flex items-center justify-center"><X className="w-5 h-5" /></div>}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-slate-800 dark:text-white truncate">{item.studentName}</p>
+              <p className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
+                {item.status === 'uploading' && 'Uploading...'}
+                {item.status === 'grading' && 'AI Grading...'}
+                {item.status === 'success' && 'Done'}
+                {item.status === 'error' && 'Failed'}
+              </p>
+            </div>
+            {item.status === 'error' && (
+              <button onClick={() => setProcessingQueue(prev => prev.filter(i => i.id !== item.id))} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+            )}
+          </div>
+        ))}
+      </div>
       <Routes>
         <Route path="/" element={<TeacherOverview teacher={teacher} assignments={assignments} submissions={submissions} />} />
 
@@ -397,361 +483,365 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
       </Routes>
 
       {/* Modals */}
-      {selectedAssignment && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4 animate-in fade-in duration-300">
-          <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] w-full max-w-2xl p-10 shadow-2xl animate-in zoom-in-95 duration-300">
-            {selectedAssignment.status === 'DRAFT' && draftEdit ? (
-              <div className="space-y-2 mb-3">
-                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Assignment Title</label>
-                <input
-                  className="input-style"
-                  value={draftEdit.title}
-                  onChange={e => setDraftEdit({ ...draftEdit, title: e.target.value })}
-                />
-              </div>
-            ) : (
-              <h3 className="text-2xl font-black mb-1">{selectedAssignment.title}</h3>
-            )}
-            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-6">assignment Created on {new Date(selectedAssignment.createdAt).toLocaleDateString()}</p>
-
-            <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2">
-              <div className="bg-slate-50 dark:bg-slate-700/60 p-6 rounded-3xl border border-slate-100 dark:border-slate-700">
-                <p className="text-[10px] font-black uppercase text-indigo-500 tracking-widest mb-2">Reference Question</p>
-                {selectedAssignment.status === 'DRAFT' && draftEdit ? (
-                  <textarea
-                    className="input-style h-32"
-                    value={draftEdit.question}
-                    onChange={e => setDraftEdit({ ...draftEdit, question: e.target.value })}
+      {
+        selectedAssignment && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4 animate-in fade-in duration-300">
+            <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] w-full max-w-2xl p-10 shadow-2xl animate-in zoom-in-95 duration-300">
+              {selectedAssignment.status === 'DRAFT' && draftEdit ? (
+                <div className="space-y-2 mb-3">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Assignment Title</label>
+                  <input
+                    className="input-style"
+                    value={draftEdit.title}
+                    onChange={e => setDraftEdit({ ...draftEdit, title: e.target.value })}
                   />
-                ) : (
-                  <p className="text-slate-600 dark:text-slate-300 font-medium leading-relaxed">{selectedAssignment.question}</p>
-                )}
-              </div>
+                </div>
+              ) : (
+                <h3 className="text-2xl font-black mb-1">{selectedAssignment.title}</h3>
+              )}
+              <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-6">assignment Created on {new Date(selectedAssignment.createdAt).toLocaleDateString()}</p>
 
-              {(selectedAssignment.status === 'DRAFT' || (selectedAssignment.teacherAnswerImages && selectedAssignment.teacherAnswerImages.length > 0) || (draftEdit && (draftEdit.teacherAnswerImages?.length || 0) > 0) || (draftImagePreviews.length > 0)) && (
-                <div className="space-y-3">
-                  <h4 className="text-xl font-black">Question Images</h4>
-                  <div className="flex flex-wrap gap-3">
-                    {(selectedAssignment.status === 'DRAFT' ? (draftEdit?.teacherAnswerImages || []) : (selectedAssignment.teacherAnswerImages || [])).map((img, idx) => (
-                      <div
-                        key={`existing-${idx}`}
-                        className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm cursor-pointer"
-                        onClick={() => window.open(img, '_blank')}
-                        title="Open image"
-                      >
-                        <img src={img} className="w-full h-full object-cover" />
-                        {selectedAssignment.status === 'DRAFT' && draftEdit && (
+              <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2">
+                <div className="bg-slate-50 dark:bg-slate-700/60 p-6 rounded-3xl border border-slate-100 dark:border-slate-700">
+                  <p className="text-[10px] font-black uppercase text-indigo-500 tracking-widest mb-2">Reference Question</p>
+                  {selectedAssignment.status === 'DRAFT' && draftEdit ? (
+                    <textarea
+                      className="input-style h-32"
+                      value={draftEdit.question}
+                      onChange={e => setDraftEdit({ ...draftEdit, question: e.target.value })}
+                    />
+                  ) : (
+                    <p className="text-slate-600 dark:text-slate-300 font-medium leading-relaxed">{selectedAssignment.question}</p>
+                  )}
+                </div>
+
+                {(selectedAssignment.status === 'DRAFT' || (selectedAssignment.teacherAnswerImages && selectedAssignment.teacherAnswerImages.length > 0) || (draftEdit && (draftEdit.teacherAnswerImages?.length || 0) > 0) || (draftImagePreviews.length > 0)) && (
+                  <div className="space-y-3">
+                    <h4 className="text-xl font-black">Question Images</h4>
+                    <div className="flex flex-wrap gap-3">
+                      {(selectedAssignment.status === 'DRAFT' ? (draftEdit?.teacherAnswerImages || []) : (selectedAssignment.teacherAnswerImages || [])).map((img, idx) => (
+                        <div
+                          key={`existing-${idx}`}
+                          className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm cursor-pointer"
+                          onClick={() => window.open(img, '_blank')}
+                          title="Open image"
+                        >
+                          <img src={img} className="w-full h-full object-cover" />
+                          {selectedAssignment.status === 'DRAFT' && draftEdit && (
+                            <button
+                              onClick={() => {
+                                const updatedImages = draftEdit.teacherAnswerImages?.filter((_, i) => i !== idx) || [];
+                                const updatedBase64 = draftEdit.teacherAnswerImagesBase64?.filter((_, i) => i !== idx) || [];
+                                setDraftEdit({
+                                  ...draftEdit,
+                                  teacherAnswerImages: updatedImages,
+                                  teacherAnswerImagesBase64: updatedBase64
+                                });
+                              }}
+                              className="absolute top-1 right-1 bg-white/90 dark:bg-slate-700/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm"
+                              title="Remove image"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      ))}
+
+                      {draftImagePreviews.map((img, idx) => (
+                        <div
+                          key={`new-${idx}`}
+                          className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm cursor-pointer"
+                          onClick={() => window.open(img, '_blank')}
+                          title="Open image"
+                        >
+                          <img src={img} className="w-full h-full object-cover" />
                           <button
                             onClick={() => {
-                              const updatedImages = draftEdit.teacherAnswerImages?.filter((_, i) => i !== idx) || [];
-                              const updatedBase64 = draftEdit.teacherAnswerImagesBase64?.filter((_, i) => i !== idx) || [];
-                              setDraftEdit({
-                                ...draftEdit,
-                                teacherAnswerImages: updatedImages,
-                                teacherAnswerImagesBase64: updatedBase64
-                              });
+                              setDraftImageFiles(draftImageFiles.filter((_, i) => i !== idx));
+                              setDraftImagePreviews(draftImagePreviews.filter((_, i) => i !== idx));
                             }}
                             className="absolute top-1 right-1 bg-white/90 dark:bg-slate-700/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm"
                             title="Remove image"
                           >
                             ✕
                           </button>
-                        )}
-                      </div>
-                    ))}
+                        </div>
+                      ))}
 
-                    {draftImagePreviews.map((img, idx) => (
-                      <div
-                        key={`new-${idx}`}
-                        className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm cursor-pointer"
-                        onClick={() => window.open(img, '_blank')}
-                        title="Open image"
-                      >
-                        <img src={img} className="w-full h-full object-cover" />
-                        <button
-                          onClick={() => {
-                            setDraftImageFiles(draftImageFiles.filter((_, i) => i !== idx));
-                            setDraftImagePreviews(draftImagePreviews.filter((_, i) => i !== idx));
-                          }}
-                          className="absolute top-1 right-1 bg-white/90 dark:bg-slate-700/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm"
-                          title="Remove image"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
-
-                    {selectedAssignment.status === 'DRAFT' && (
-                      <label className="w-24 h-24 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-all hover:border-indigo-400 active:scale-95">
-                        <input type="file" accept="image/*" onChange={handleDraftImageChange} className="hidden" />
-                        <span className="text-3xl text-slate-300 font-light">+</span>
-                      </label>
-                    )}
+                      {selectedAssignment.status === 'DRAFT' && (
+                        <label className="w-24 h-24 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-all hover:border-indigo-400 active:scale-95">
+                          <input type="file" accept="image/*" onChange={handleDraftImageChange} className="hidden" />
+                          <span className="text-3xl text-slate-300 font-light">+</span>
+                        </label>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {selectedAssignment.status === 'DRAFT' && draftEdit && (
-                <div className="space-y-3">
-                  <h4 className="text-xl font-black">Marking Criteria</h4>
-                  <div className="space-y-2">
-                    {draftEdit.markingPoints.map((c, i) => (
-                      <div key={i} className="flex gap-2 items-center bg-slate-50 dark:bg-slate-700/60 p-3 rounded-xl border border-slate-100 dark:border-slate-700">
-                        <span className="text-xs font-black text-indigo-600 bg-white dark:bg-slate-800 w-6 h-6 rounded-lg flex items-center justify-center shadow-sm">{i + 1}</span>
-                        <input
-                          className="bg-transparent border-none text-sm font-bold flex-1 focus:ring-0"
-                          value={c.point}
-                          onChange={e => {
-                            const updated = [...draftEdit.markingPoints];
-                            updated[i] = { ...updated[i], point: e.target.value };
-                            setDraftEdit({ ...draftEdit, markingPoints: updated });
-                          }}
-                        />
-                        <input
-                          type="number"
-                          className="w-16 bg-white dark:bg-slate-800 border-none rounded-lg text-sm font-black text-center focus:ring-1 focus:ring-indigo-500"
-                          value={c.weight}
-                          onChange={e => {
-                            const updated = [...draftEdit.markingPoints];
-                            updated[i] = { ...updated[i], weight: parseInt(e.target.value) || 0 };
-                            setDraftEdit({ ...draftEdit, markingPoints: updated });
-                          }}
-                        />
-                        <button
-                          onClick={() => {
-                            const updated = draftEdit.markingPoints.filter((_, idx) => idx !== i);
-                            setDraftEdit({ ...draftEdit, markingPoints: updated });
-                          }}
-                          className="w-6 h-6 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 flex items-center justify-center transition-colors"
-                          title="Delete criterion"
-                        >
-                          ✕
-                        </button>
+                {selectedAssignment.status === 'DRAFT' && draftEdit && (
+                  <div className="space-y-3">
+                    <h4 className="text-xl font-black">Marking Criteria</h4>
+                    <div className="space-y-2">
+                      {draftEdit.markingPoints.map((c, i) => (
+                        <div key={i} className="flex gap-2 items-center bg-slate-50 dark:bg-slate-700/60 p-3 rounded-xl border border-slate-100 dark:border-slate-700">
+                          <span className="text-xs font-black text-indigo-600 bg-white dark:bg-slate-800 w-6 h-6 rounded-lg flex items-center justify-center shadow-sm">{i + 1}</span>
+                          <input
+                            className="bg-transparent border-none text-sm font-bold flex-1 focus:ring-0"
+                            value={c.point}
+                            onChange={e => {
+                              const updated = [...draftEdit.markingPoints];
+                              updated[i] = { ...updated[i], point: e.target.value };
+                              setDraftEdit({ ...draftEdit, markingPoints: updated });
+                            }}
+                          />
+                          <input
+                            type="number"
+                            className="w-16 bg-white dark:bg-slate-800 border-none rounded-lg text-sm font-black text-center focus:ring-1 focus:ring-indigo-500"
+                            value={c.weight}
+                            onChange={e => {
+                              const updated = [...draftEdit.markingPoints];
+                              updated[i] = { ...updated[i], weight: parseInt(e.target.value) || 0 };
+                              setDraftEdit({ ...draftEdit, markingPoints: updated });
+                            }}
+                          />
+                          <button
+                            onClick={() => {
+                              const updated = draftEdit.markingPoints.filter((_, idx) => idx !== i);
+                              setDraftEdit({ ...draftEdit, markingPoints: updated });
+                            }}
+                            className="w-6 h-6 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 flex items-center justify-center transition-colors"
+                            title="Delete criterion"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        onClick={() => setDraftEdit({ ...draftEdit, markingPoints: [...draftEdit.markingPoints, { point: '', weight: 1 }] })}
+                        className="w-full py-2 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-400 hover:border-indigo-400 hover:text-indigo-400 transition-all"
+                      >
+                        + Add Rule
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-4">
+                  <h4 className="text-xl font-black">Student Submissions</h4>
+
+                  {(() => {
+                    const assignmentSubmissions = submissions.filter(s => s.assignmentId === selectedAssignment.id);
+                    const submittedCount = assignmentSubmissions.length;
+                    const uniqueStudentIds = new Set(assignmentSubmissions.map(s => s.studentId));
+                    const uniqueSubmittedCount = uniqueStudentIds.size;
+
+                    // Get total students in the class
+                    const assignmentClass = classData[selectedAssignment.classId];
+                    const totalStudents = assignmentClass?.studentIds?.length || 0;
+                    const pendingCount = totalStudents - uniqueSubmittedCount;
+
+                    return (
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-emerald-50 dark:bg-emerald-950/20 border-2 border-emerald-200 dark:border-emerald-900 rounded-2xl p-6 text-center">
+                          <div className="text-4xl font-black text-emerald-600 dark:text-emerald-400 mb-2">{submittedCount}</div>
+                          <p className="text-xs font-bold text-emerald-600/70 dark:text-emerald-400/70 uppercase tracking-widest">Submitted</p>
+                        </div>
+                        <div className="bg-amber-50 dark:bg-amber-950/20 border-2 border-amber-200 dark:border-amber-900 rounded-2xl p-6 text-center">
+                          <div className="text-4xl font-black text-amber-600 dark:text-amber-400 mb-2">
+                            {pendingCount >= 0 ? pendingCount : '—'}
+                          </div>
+                          <p className="text-xs font-bold text-amber-600/70 dark:text-amber-400/70 uppercase tracking-widest">Pending</p>
+                        </div>
                       </div>
-                    ))}
+                    );
+                  })()}
+                </div>
+              </div>
+
+              <div className="pt-8 mt-4 border-t border-slate-100 dark:border-slate-700">
+                {selectedAssignment.status === 'DRAFT' ? (
+                  <div className="flex gap-4">
                     <button
-                      onClick={() => setDraftEdit({ ...draftEdit, markingPoints: [...draftEdit.markingPoints, { point: '', weight: 1 }] })}
-                      className="w-full py-2 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-400 hover:border-indigo-400 hover:text-indigo-400 transition-all"
+                      onClick={() => setSelectedAssignment(null)}
+                      className="flex-1 py-4 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-600 transition-all active:scale-95"
                     >
-                      + Add Rule
+                      Close
+                    </button>
+                    <button
+                      disabled={isSaving || !draftEdit}
+                      onClick={async () => {
+                        if (!draftEdit) return;
+                        setIsSaving(true);
+                        try {
+                          await persistDraft('DRAFT');
+                          alert('Draft updated!');
+                        } catch (err: any) {
+                          alert('Failed to update draft: ' + err.message);
+                        } finally {
+                          setIsSaving(false);
+                        }
+                      }}
+                      className="flex-1 py-4 bg-slate-900 dark:bg-slate-200 text-white dark:text-slate-900 rounded-2xl font-black shadow-xl transition-all active:scale-95 disabled:opacity-50"
+                    >
+                      {isSaving ? 'Saving...' : 'Save Changes'}
+                    </button>
+                    <button
+                      disabled={isSaving}
+                      onClick={async () => {
+                        setIsSaving(true);
+                        try {
+                          const updatedAssignment = await persistDraft('PUBLISHED');
+                          setSelectedAssignment(null);
+                          alert('Assignment published successfully!');
+                        } catch (err: any) {
+                          alert('Failed to publish: ' + err.message);
+                        } finally {
+                          setIsSaving(false);
+                        }
+                      }}
+                      className="flex-[2] py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
+                    >
+                      {isSaving ? 'Publishing...' : '📢 Publish Now'}
                     </button>
                   </div>
-                </div>
-              )}
-
-              <div className="space-y-4">
-                <h4 className="text-xl font-black">Student Submissions</h4>
-
-                {(() => {
-                  const assignmentSubmissions = submissions.filter(s => s.assignmentId === selectedAssignment.id);
-                  const submittedCount = assignmentSubmissions.length;
-                  const uniqueStudentIds = new Set(assignmentSubmissions.map(s => s.studentId));
-                  const uniqueSubmittedCount = uniqueStudentIds.size;
-
-                  // Get total students in the class
-                  const assignmentClass = classData[selectedAssignment.classId];
-                  const totalStudents = assignmentClass?.studentIds?.length || 0;
-                  const pendingCount = totalStudents - uniqueSubmittedCount;
-
-                  return (
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-emerald-50 dark:bg-emerald-950/20 border-2 border-emerald-200 dark:border-emerald-900 rounded-2xl p-6 text-center">
-                        <div className="text-4xl font-black text-emerald-600 dark:text-emerald-400 mb-2">{submittedCount}</div>
-                        <p className="text-xs font-bold text-emerald-600/70 dark:text-emerald-400/70 uppercase tracking-widest">Submitted</p>
-                      </div>
-                      <div className="bg-amber-50 dark:bg-amber-950/20 border-2 border-amber-200 dark:border-amber-900 rounded-2xl p-6 text-center">
-                        <div className="text-4xl font-black text-amber-600 dark:text-amber-400 mb-2">
-                          {pendingCount >= 0 ? pendingCount : '—'}
-                        </div>
-                        <p className="text-xs font-bold text-amber-600/70 dark:text-amber-400/70 uppercase tracking-widest">Pending</p>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-
-            <div className="pt-8 mt-4 border-t border-slate-100 dark:border-slate-700">
-              {selectedAssignment.status === 'DRAFT' ? (
-                <div className="flex gap-4">
+                ) : (
                   <button
                     onClick={() => setSelectedAssignment(null)}
-                    className="flex-1 py-4 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-600 transition-all active:scale-95"
+                    className="w-full py-4 bg-slate-900 dark:bg-indigo-600 text-white rounded-2xl font-black shadow-xl transition-all active:scale-95"
                   >
-                    Close
-                  </button>
-                  <button
-                    disabled={isSaving || !draftEdit}
-                    onClick={async () => {
-                      if (!draftEdit) return;
-                      setIsSaving(true);
-                      try {
-                        await persistDraft('DRAFT');
-                        alert('Draft updated!');
-                      } catch (err: any) {
-                        alert('Failed to update draft: ' + err.message);
-                      } finally {
-                        setIsSaving(false);
-                      }
-                    }}
-                    className="flex-1 py-4 bg-slate-900 dark:bg-slate-200 text-white dark:text-slate-900 rounded-2xl font-black shadow-xl transition-all active:scale-95 disabled:opacity-50"
-                  >
-                    {isSaving ? 'Saving...' : 'Save Changes'}
-                  </button>
-                  <button
-                    disabled={isSaving}
-                    onClick={async () => {
-                      setIsSaving(true);
-                      try {
-                        const updatedAssignment = await persistDraft('PUBLISHED');
-                        setSelectedAssignment(null);
-                        alert('Assignment published successfully!');
-                      } catch (err: any) {
-                        alert('Failed to publish: ' + err.message);
-                      } finally {
-                        setIsSaving(false);
-                      }
-                    }}
-                    className="flex-[2] py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
-                  >
-                    {isSaving ? 'Publishing...' : '📢 Publish Now'}
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => setSelectedAssignment(null)}
-                  className="w-full py-4 bg-slate-900 dark:bg-indigo-600 text-white rounded-2xl font-black shadow-xl transition-all active:scale-95"
-                >
-                  Return to Dashboard
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showAdd && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4 animate-in fade-in duration-300">
-          <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] w-full max-w-2xl p-10 shadow-2xl overflow-y-auto max-h-[90vh] animate-in zoom-in-95 duration-300">
-            <h3 className="text-3xl font-black mb-8">Create Assignment assignment</h3>
-            <div className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Class</label>
-                  <select className="input-style" value={selectedClassId} onChange={e => setSelectedClassId(e.target.value)}>
-                    <option value="">Select Class</option>
-                    {teacher?.assignedClassId && <option value={teacher.assignedClassId}>{classNames[teacher.assignedClassId] || teacher.assignedClassId} (Class Teacher)</option>}
-                    {teacher?.assignedSubjects.map((s, i) => (
-                      <option key={i} value={s.classId}>{classNames[s.classId] || s.classId} ({subjectNames[s.subjectId] || s.subjectId})</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Subject</label>
-                  <select className="input-style" value={selectedSubjectId} onChange={e => setSelectedSubjectId(e.target.value)}>
-                    <option value="">Select Subject</option>
-                    {teacher?.primarySubject && !uniqueAssignedSubjects.some(s => s.name === teacher.primarySubject) && (
-                      <option value={teacher.primarySubject}>{teacher.primarySubject}</option>
-                    )}
-                    {uniqueAssignedSubjects.map((s, i) => (
-                      <option key={i} value={s.id}>{s.name}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Assignment Title</label>
-                <input className="input-style" placeholder="Ex: Physics Mid-term" value={title} onChange={e => setTitle(e.target.value)} />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Question / Instructions</label>
-                <textarea className="input-style h-40" placeholder="Enter the full question text here..." value={question} onChange={e => setQuestion(e.target.value)} />
-              </div>
-
-              <div className="space-y-4">
-                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Correct Solution (Reference Images)</label>
-                <div className="flex flex-wrap gap-3">
-                  {referenceImageUrls.map((img, idx) => (
-                    <div key={idx} className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm animate-in zoom-in duration-200">
-                      <img src={img} className="w-full h-full object-cover" />
-                      <button onClick={() => {
-                        setReferenceImages(referenceImages.filter((_, i) => i !== idx));
-                        setReferenceImageUrls(referenceImageUrls.filter((_, i) => i !== idx));
-                      }} className="absolute top-1 right-1 bg-white/90 dark:bg-slate-700/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm">✕</button>
-                    </div>
-                  ))}
-                  <label className="w-24 h-24 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-all hover:border-indigo-400 active:scale-95">
-                    <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
-                    <span className="text-3xl text-slate-300 font-light">+</span>
-                  </label>
-                </div>
-                {referenceImageUrls.length > 0 && criteria.length === 0 && (
-                  <button onClick={handleExtractCriteria} disabled={isExtracting} className={`w-full py-3 ${isExtracting ? 'bg-slate-100 dark:bg-slate-700 animate-pulse text-slate-400' : 'bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300'} rounded-2xl text-sm font-black uppercase tracking-widest transition-all`}>
-                    {isExtracting ? 'AI Analyzing Reference...' : '✨ Auto-Extract Marking Points'}
+                    Return to Dashboard
                   </button>
                 )}
               </div>
+            </div>
+          </div>
+        )
+      }
 
-              {criteria.length > 0 && (
-                <div className="space-y-3">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Marking Criteria & Weights</label>
+      {
+        showAdd && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4 animate-in fade-in duration-300">
+            <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] w-full max-w-2xl p-10 shadow-2xl overflow-y-auto max-h-[90vh] animate-in zoom-in-95 duration-300">
+              <h3 className="text-3xl font-black mb-8">Create Assignment assignment</h3>
+              <div className="space-y-6">
+                <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    {criteria.map((c, i) => (
-                      <div key={i} className="flex gap-2 items-center bg-slate-50 dark:bg-slate-700/60 p-3 rounded-xl border border-slate-100 dark:border-slate-700 animate-in slide-in-from-left duration-200" style={{ animationDelay: `${i * 50}ms` }}>
-                        <span className="text-xs font-black text-indigo-600 bg-white dark:bg-slate-800 w-6 h-6 rounded-lg flex items-center justify-center shadow-sm">{i + 1}</span>
-                        <input className="bg-transparent border-none text-sm font-bold flex-1 focus:ring-0" value={c.point} onChange={e => {
-                          const newC = [...criteria];
-                          newC[i].point = e.target.value;
-                          setCriteria(newC);
-                        }} />
-                        <input type="number" className="w-16 bg-white dark:bg-slate-800 border-none rounded-lg text-sm font-black text-center focus:ring-1 focus:ring-indigo-500" value={c.weight} onChange={e => {
-                          const newC = [...criteria];
-                          newC[i].weight = parseInt(e.target.value) || 0;
-                          setCriteria(newC);
-                        }} />
-                        <button
-                          onClick={() => setCriteria(criteria.filter((_, idx) => idx !== i))}
-                          className="w-6 h-6 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 flex items-center justify-center transition-colors"
-                          title="Delete criterion"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
-                    <button onClick={() => setCriteria([...criteria, { point: '', weight: 1 }])} className="w-full py-2 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-400 hover:border-indigo-400 hover:text-indigo-400 transition-all">+ Add Rule</button>
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Class</label>
+                    <select className="input-style" value={selectedClassId} onChange={e => setSelectedClassId(e.target.value)}>
+                      <option value="">Select Class</option>
+                      {teacher?.assignedClassId && <option value={teacher.assignedClassId}>{classNames[teacher.assignedClassId] || teacher.assignedClassId} (Class Teacher)</option>}
+                      {teacher?.assignedSubjects.map((s, i) => (
+                        <option key={i} value={s.classId}>{classNames[s.classId] || s.classId} ({subjectNames[s.subjectId] || s.subjectId})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Subject</label>
+                    <select className="input-style" value={selectedSubjectId} onChange={e => setSelectedSubjectId(e.target.value)}>
+                      <option value="">Select Subject</option>
+                      {teacher?.primarySubject && !uniqueAssignedSubjects.some(s => s.name === teacher.primarySubject) && (
+                        <option value={teacher.primarySubject}>{teacher.primarySubject}</option>
+                      )}
+                      {uniqueAssignedSubjects.map((s, i) => (
+                        <option key={i} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
-              )}
 
-              <div className="flex gap-4 pt-8">
-                <button
-                  onClick={() => setShowAdd(false)}
-                  className="flex-1 py-4 text-slate-500 font-bold hover:bg-slate-50 dark:hover:bg-slate-800 rounded-2xl transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  disabled={isSaving}
-                  onClick={() => handleSave('DRAFT')}
-                  className="flex-1 py-4 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-2xl font-bold shadow-sm transition-all active:scale-95 disabled:opacity-50"
-                >
-                  {isSaving ? 'Saving...' : 'Save Draft'}
-                </button>
-                <button
-                  disabled={isSaving}
-                  onClick={() => handleSave('PUBLISHED')}
-                  className="flex-[2] py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
-                >
-                  {isSaving ? 'Publishing...' : 'Publish assignment'}
-                </button>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Assignment Title</label>
+                  <input className="input-style" placeholder="Ex: Physics Mid-term" value={title} onChange={e => setTitle(e.target.value)} />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Question / Instructions</label>
+                  <textarea className="input-style h-40" placeholder="Enter the full question text here..." value={question} onChange={e => setQuestion(e.target.value)} />
+                </div>
+
+                <div className="space-y-4">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Correct Solution (Reference Images)</label>
+                  <div className="flex flex-wrap gap-3">
+                    {referenceImageUrls.map((img, idx) => (
+                      <div key={idx} className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm animate-in zoom-in duration-200">
+                        <img src={img} className="w-full h-full object-cover" />
+                        <button onClick={() => {
+                          setReferenceImages(referenceImages.filter((_, i) => i !== idx));
+                          setReferenceImageUrls(referenceImageUrls.filter((_, i) => i !== idx));
+                        }} className="absolute top-1 right-1 bg-white/90 dark:bg-slate-700/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm">✕</button>
+                      </div>
+                    ))}
+                    <label className="w-24 h-24 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-all hover:border-indigo-400 active:scale-95">
+                      <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
+                      <span className="text-3xl text-slate-300 font-light">+</span>
+                    </label>
+                  </div>
+                  {referenceImageUrls.length > 0 && criteria.length === 0 && (
+                    <button onClick={handleExtractCriteria} disabled={isExtracting} className={`w-full py-3 ${isExtracting ? 'bg-slate-100 dark:bg-slate-700 animate-pulse text-slate-400' : 'bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300'} rounded-2xl text-sm font-black uppercase tracking-widest transition-all`}>
+                      {isExtracting ? 'AI Analyzing Reference...' : '✨ Auto-Extract Marking Points'}
+                    </button>
+                  )}
+                </div>
+
+                {criteria.length > 0 && (
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Marking Criteria & Weights</label>
+                    <div className="space-y-2">
+                      {criteria.map((c, i) => (
+                        <div key={i} className="flex gap-2 items-center bg-slate-50 dark:bg-slate-700/60 p-3 rounded-xl border border-slate-100 dark:border-slate-700 animate-in slide-in-from-left duration-200" style={{ animationDelay: `${i * 50}ms` }}>
+                          <span className="text-xs font-black text-indigo-600 bg-white dark:bg-slate-800 w-6 h-6 rounded-lg flex items-center justify-center shadow-sm">{i + 1}</span>
+                          <input className="bg-transparent border-none text-sm font-bold flex-1 focus:ring-0" value={c.point} onChange={e => {
+                            const newC = [...criteria];
+                            newC[i].point = e.target.value;
+                            setCriteria(newC);
+                          }} />
+                          <input type="number" className="w-16 bg-white dark:bg-slate-800 border-none rounded-lg text-sm font-black text-center focus:ring-1 focus:ring-indigo-500" value={c.weight} onChange={e => {
+                            const newC = [...criteria];
+                            newC[i].weight = parseInt(e.target.value) || 0;
+                            setCriteria(newC);
+                          }} />
+                          <button
+                            onClick={() => setCriteria(criteria.filter((_, idx) => idx !== i))}
+                            className="w-6 h-6 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 flex items-center justify-center transition-colors"
+                            title="Delete criterion"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                      <button onClick={() => setCriteria([...criteria, { point: '', weight: 1 }])} className="w-full py-2 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-400 hover:border-indigo-400 hover:text-indigo-400 transition-all">+ Add Rule</button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-4 pt-8">
+                  <button
+                    onClick={() => setShowAdd(false)}
+                    className="flex-1 py-4 text-slate-500 font-bold hover:bg-slate-50 dark:hover:bg-slate-800 rounded-2xl transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    disabled={isSaving}
+                    onClick={() => handleSave('DRAFT')}
+                    className="flex-1 py-4 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-2xl font-bold shadow-sm transition-all active:scale-95 disabled:opacity-50"
+                  >
+                    {isSaving ? 'Saving...' : 'Save Draft'}
+                  </button>
+                  <button
+                    disabled={isSaving}
+                    onClick={() => handleSave('PUBLISHED')}
+                    className="flex-[2] py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
+                  >
+                    {isSaving ? 'Publishing...' : 'Publish assignment'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )
+      }
+    </div >
   );
 };
 
@@ -2915,8 +3005,19 @@ const TeacherGradebook: React.FC<{
                                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Total Score</p>
                               </div>
                             </div>
-                            {selectedSubmission.feedback && (
-                              <p className="mt-4 text-sm text-slate-600 dark:text-slate-300">{selectedSubmission.feedback}</p>
+                            {selectedSubmission.studentAnswerImages && selectedSubmission.studentAnswerImages.length > 0 ? (
+                              <div className="mt-6">
+                                <h5 className="text-sm font-black uppercase tracking-widest text-slate-400 mb-3">Student Answer</h5>
+                                <div className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-black">
+                                  <img
+                                    src={selectedSubmission.studentAnswerImages[0]}
+                                    alt="Student Answer"
+                                    className="w-full h-auto max-h-[500px] object-contain mx-auto"
+                                  />
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="mt-4 text-sm text-slate-400 italic">No image available for this submission.</p>
                             )}
                           </div>
 
