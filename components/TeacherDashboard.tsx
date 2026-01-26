@@ -1,13 +1,20 @@
 
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { Assignment, Submission, MarkingCriterion, Teacher, Student, Subject, Class, NoteCorrection, GeneratedNote } from '../types';
+import { Assignment, Submission, MarkingCriterion, Teacher, Student, Subject, Class, NoteCorrection, GeneratedNote, Annotation } from '../types';
+import { BookOpen, GraduationCap, Users, FileText, CheckCircle, Clock, ChevronRight, ChevronDown, Search, Filter, MoreVertical, Download, X, Image as ImageIcon, Crop as CropIcon, Camera } from 'lucide-react';
 import { dbService } from '../services/dbService';
+import Cropper from 'react-easy-crop';
+import { getCroppedImg } from '../utils/cropImage';
+import { uploadBase64ToStorage } from '../services/pdfExtractor';
 import { extractMarkingPoints, analyzeTeachingNote, NoteSectionDraft, NoteAnalysisResult, createEnhancedNote, extractCorrectionSummary, applyNoteCorrection, extractModuleTitle } from '../services/geminiService';
 import { extractPDFContent, ExtractedImage } from '../services/pdfExtractor';
+import { WebcamScanner } from './WebcamScanner';
 import mermaid from 'mermaid';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
+import { identifyStudentName, analyzeAnswer } from '../services/geminiService';
+import { compressImage } from '../utils/imageUtils';
 
 const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ teacherId, adminId }) => {
   const [teacher, setTeacher] = useState<Teacher | null>(null);
@@ -24,6 +31,9 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
   const [question, setQuestion] = useState('');
   const [referenceImages, setReferenceImages] = useState<File[]>([]);
   const [referenceImageUrls, setReferenceImageUrls] = useState<string[]>([]);
+  // New States for Due Date
+  const [dueDate, setDueDate] = useState<string>(''); // ISO String from input
+  const [allowLate, setAllowLate] = useState<boolean>(true);
   const [criteria, setCriteria] = useState<MarkingCriterion[]>([]);
   const [isExtracting, setIsExtracting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -34,6 +44,15 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
   const [classNames, setClassNames] = useState<{ [key: string]: string }>({});
   const [subjectNames, setSubjectNames] = useState<{ [key: string]: string }>({});
   const [classData, setClassData] = useState<{ [key: string]: Class }>({});
+
+  // Toast Notification
+  const [notification, setNotification] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+
+  const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 3000);
+  };
+
 
   // Load Teacher Profile & Names
   useEffect(() => {
@@ -82,16 +101,25 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
       const myAssignments = await dbService.getTeacherAssignments(adminId, teacherId);
       setAssignments(myAssignments);
 
-      // Fetch all submissions for teacher's assignments
-      const allSubmissions: Submission[] = [];
-      for (const assignment of myAssignments) {
-        const assignmentSubs = await dbService.getSubmissionsByAssignment(adminId, assignment.id);
-        allSubmissions.push(...assignmentSubs);
-      }
-      setSubmissions(allSubmissions);
+      // Fetch Submissions
+      await refreshSubmissions(myAssignments);
     };
+
     fetchProfileAndNames();
   }, [teacherId, adminId]);
+
+  const refreshSubmissions = async (currentAssignments: Assignment[] = assignments) => {
+    const allSubmissions: Submission[] = [];
+    for (const assignment of currentAssignments) {
+      const assignmentSubs = await dbService.getSubmissionsByAssignment(adminId, assignment.id);
+      allSubmissions.push(...assignmentSubs);
+    }
+    setSubmissions(allSubmissions);
+  };
+
+  const updateLocalSubmission = (updatedSub: Submission) => {
+    setSubmissions(prev => prev.map(s => s.id === updatedSub.id ? updatedSub : s));
+  };
 
   useEffect(() => {
     if (selectedAssignment?.status === 'DRAFT') {
@@ -149,6 +177,8 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
   const uniqueAssignedSubjects = Array.from(new Set(teacher?.assignedSubjects.map(s => s.subjectId)))
     .map(id => ({ id, name: subjectNames[id] || id }));
 
+
+
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -196,6 +226,9 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
         teacherAnswerImagesBase64: referenceImageUrls, // Base64 for Gemini
         markingPoints: criteria,
         createdAt: Date.now(),
+        // Save Due Date
+        dueDate: dueDate ? new Date(dueDate).getTime() : undefined,
+        allowLateSubmissions: allowLate,
         gradeId: 'extracted-from-class',
         classId: selectedClassId,
         subjectId: selectedSubjectId,
@@ -206,7 +239,8 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
       await dbService.saveAssignment(adminId, newA);
       setAssignments(prev => [newA, ...prev]);
       setShowAdd(false);
-      setTitle(''); setQuestion(''); setCriteria([]); setReferenceImages([]); setReferenceImageUrls([]);
+      // Reset Form
+      setTitle(''); setQuestion(''); setCriteria([]); setReferenceImages([]); setReferenceImageUrls([]); setDueDate(''); setAllowLate(true);
       alert(status === 'DRAFT' ? 'Draft saved!' : 'Assignment published!');
     } catch (err: any) {
       console.error(err);
@@ -219,8 +253,192 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
   const drafts = assignments.filter(a => a.status === 'DRAFT');
   const published = assignments.filter(a => a.status === 'PUBLISHED');
 
+  // Scanning State
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanningAssignment, setScanningAssignment] = useState<Assignment | null>(null);
+
+  // Async Scan Flow State
+  const [scanProcessing, setScanProcessing] = useState(false);
+  const [scanResult, setScanResult] = useState<{ studentName: string | null, confidence: string } | null>(null);
+  const [pendingScanImage, setPendingScanImage] = useState<string | null>(null);
+
+  // Background Processing Queue
+  type QueueItem = {
+    id: string;
+    studentName: string;
+    status: 'uploading' | 'grading' | 'success' | 'error';
+    timestamp: number;
+    error?: string;
+  };
+  const [processingQueue, setProcessingQueue] = useState<QueueItem[]>([]);
+
+  // ... (previous effects)
+
+  const handleScanStart = (assignment: Assignment) => {
+    setScanningAssignment(assignment);
+    setIsScanning(true);
+    setScanResult(null);
+    setScanProcessing(false);
+  };
+
+  const handleScanCapture = async (imageData: string) => {
+    if (!scanningAssignment) return;
+    setScanProcessing(true);
+
+    try {
+      const compressedImage = await compressImage(imageData);
+      setPendingScanImage(compressedImage); // Store for next step
+
+      const students = await dbService.getStudentsByClass(adminId, scanningAssignment.classId);
+      const studentNames = students.map(s => s.name);
+
+      const identification = await identifyStudentName(compressedImage, studentNames);
+      setScanResult(identification);
+
+    } catch (err: any) {
+      alert("Error identifying: " + err.message);
+      setScanProcessing(false);
+    } finally {
+      setScanProcessing(false);
+    }
+  };
+
+  const handleScanCancel = () => {
+    setScanResult(null);
+    setPendingScanImage(null);
+    setScanProcessing(false);
+  };
+
+  const handleScanConfirm = async () => {
+    if (!scanningAssignment || !scanResult || !pendingScanImage) return;
+
+    const queueId = Date.now().toString();
+    const studentName = scanResult.studentName || "Unknown Student";
+
+    // 1. Add to Queue
+    setProcessingQueue(prev => [{
+      id: queueId,
+      studentName,
+      status: 'uploading',
+      timestamp: Date.now()
+    }, ...prev]);
+
+    // 2. Start Background Job
+    processSubmissionInBackground(queueId, pendingScanImage, scanResult.studentName, scanningAssignment);
+
+    // 3. Reset UI immediately for next scan
+    setScanResult(null);
+    setPendingScanImage(null);
+    // scanProcessing is already false
+  };
+
+  const processSubmissionInBackground = async (queueId: string, imageData: string, identifiedName: string | null, assignment: Assignment) => {
+    try {
+      const students = await dbService.getStudentsByClass(adminId, assignment.classId);
+      let matchedStudent = students.find(s => s.name === identifiedName);
+
+      // If not matched, we might still proceed but as "Unknown"? 
+      // For now assume matched (verified by user in UI)
+      if (!matchedStudent) {
+        // Fallback for logic safety
+        matchedStudent = { id: 'unknown', name: identifiedName || 'Unknown' } as any;
+      }
+
+      // Update Queue: Grading
+      setProcessingQueue(prev => prev.map(i => i.id === queueId ? { ...i, status: 'grading' } : i));
+
+      // Upload
+      const studentImgUrl = await uploadBase64ToStorage(imageData, teacherId, `scan_${matchedStudent?.id}_${Date.now()}`);
+
+      // Grade
+      // If teacherAnswerImagesBase64 is empty, we warn? (Skip warning in background, just do best effors)
+      const aiResult = await analyzeAnswer(assignment, [imageData]);
+
+      // Save
+      const submission: Submission = {
+        id: crypto.randomUUID(),
+        assignmentId: assignment.id,
+        studentId: matchedStudent!.id,
+        studentName: matchedStudent!.name,
+        studentAnswerImages: [studentImgUrl],
+        studentAnswerImagesBase64: [imageData],
+        feedback: aiResult.feedback,
+        score: aiResult.score,
+        maxScore: aiResult.totalPossible,
+        criteriaScores: aiResult.criteriasMet.map(met => met ? 1 : 0),
+        criteriasMet: aiResult.criteriasMet,
+        annotations: aiResult.annotations, // Save Annotations
+        gradedAt: Date.now()
+      };
+
+      await dbService.saveSubmission(adminId, submission);
+
+      // Update local state immediately (Optimistic/Confirmed Update)
+      setSubmissions(prev => {
+        // Remove existing if replacing (e.g. re-grade), otherwise add
+        const filtered = prev.filter(s => s.id !== submission.id);
+        return [submission, ...filtered];
+      });
+
+      // Success
+      setProcessingQueue(prev => prev.map(i => i.id === queueId ? { ...i, status: 'success' } : i));
+
+      // Remove from queue after 5 seconds to clean up?
+      setTimeout(() => {
+        setProcessingQueue(prev => prev.filter(i => i.id !== queueId));
+      }, 8000);
+
+    } catch (err: any) {
+      console.error("Background processing failed", err);
+      setProcessingQueue(prev => prev.map(i => i.id === queueId ? { ...i, status: 'error', error: err.message } : i));
+    }
+  };
+
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
+    <div className="space-y-8 animate-in fade-in duration-500 relative">
+      {/* Toast Notification */}
+      {notification && (
+        <div className={`fixed top-4 left-1/2 transform -translate-x-1/2 z-[250] flex items-center gap-3 px-6 py-3 rounded-2xl shadow-2xl animate-in slide-in-from-top-4 duration-300 ${notification.type === 'success' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'}`}>
+          {notification.type === 'success' ? <CheckCircle className="w-5 h-5" /> : <X className="w-5 h-5" />}
+          <span className="font-bold">{notification.message}</span>
+        </div>
+      )}
+      {/* Webcam Overlay */}
+      <WebcamScanner
+        isActive={isScanning}
+        onClose={() => setIsScanning(false)}
+        onCapture={handleScanCapture}
+        isProcessing={scanProcessing}
+        scanResult={scanResult}
+        onScanConfirm={handleScanConfirm}
+        onScanCancel={handleScanCancel}
+      />
+
+      {/* Processing Queue Overlay (Visible Global) */}
+      <div className="fixed bottom-4 right-4 z-[110] flex flex-col gap-2 pointer-events-none">
+        {processingQueue.map(item => (
+          <div key={item.id} className="bg-white dark:bg-slate-800 p-3 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 flex items-center gap-3 animate-in slide-in-from-right duration-300 w-72 pointer-events-auto">
+            <div className="relative">
+              {item.status === 'uploading' && <div className="w-8 h-8 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></div>}
+              {item.status === 'grading' && <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center animate-pulse"><img src="/ai-icon.png" className="w-4 h-4" alt="AI" onError={(e) => (e.currentTarget.style.display = 'none')} />✨</div>}
+              {item.status === 'success' && <div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center"><CheckCircle className="w-5 h-5" /></div>}
+              {item.status === 'error' && <div className="w-8 h-8 rounded-full bg-red-100 text-red-600 flex items-center justify-center"><X className="w-5 h-5" /></div>}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-slate-800 dark:text-white truncate">{item.studentName}</p>
+              <p className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
+                {item.status === 'uploading' && 'Uploading...'}
+                {item.status === 'grading' && 'AI Grading...'}
+                {item.status === 'success' && 'Done'}
+                {item.status === 'error' && 'Failed'}
+              </p>
+            </div>
+            {item.status === 'error' && (
+              <button onClick={() => setProcessingQueue(prev => prev.filter(i => i.id !== item.id))} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+            )}
+          </div>
+        ))}
+      </div>
       <Routes>
         <Route path="/" element={<TeacherOverview teacher={teacher} assignments={assignments} submissions={submissions} />} />
 
@@ -241,7 +459,12 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
               <h3 className="text-xl font-bold text-slate-400 uppercase tracking-widest pl-2 border-l-4 border-indigo-500">Active Assignments</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {published.map(a => (
-                  <AssignmentCard key={a.id} assignment={a} onClick={() => setSelectedAssignment(a)} />
+                  <AssignmentCard
+                    key={a.id}
+                    assignment={a}
+                    onClick={() => setSelectedAssignment(a)}
+                    onScan={() => handleScanStart(a)}
+                  />
                 ))}
                 {published.length === 0 && (
                   <div className="col-span-full py-10 text-center text-slate-400 italic">No active assignments. Create one or publish a draft.</div>
@@ -270,6 +493,11 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
             submissions={submissions}
             classNames={classNames}
             subjectNames={subjectNames}
+            adminId={adminId}
+            onUpdateSubmission={updateLocalSubmission}
+            onRefresh={() => refreshSubmissions()}
+            onSuccess={(msg) => showNotification(msg, 'success')}
+            onError={(msg) => showNotification(msg, 'error')}
           />
         } />
 
@@ -299,361 +527,389 @@ const TeacherDashboard: React.FC<{ teacherId: string, adminId: string }> = ({ te
       </Routes>
 
       {/* Modals */}
-      {selectedAssignment && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4 animate-in fade-in duration-300">
-          <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] w-full max-w-2xl p-10 shadow-2xl animate-in zoom-in-95 duration-300">
-            {selectedAssignment.status === 'DRAFT' && draftEdit ? (
-              <div className="space-y-2 mb-3">
-                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Assignment Title</label>
-                <input
-                  className="input-style"
-                  value={draftEdit.title}
-                  onChange={e => setDraftEdit({ ...draftEdit, title: e.target.value })}
-                />
-              </div>
-            ) : (
-              <h3 className="text-2xl font-black mb-1">{selectedAssignment.title}</h3>
-            )}
-            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-6">assignment Created on {new Date(selectedAssignment.createdAt).toLocaleDateString()}</p>
-
-            <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2">
-              <div className="bg-slate-50 dark:bg-slate-700/60 p-6 rounded-3xl border border-slate-100 dark:border-slate-700">
-                <p className="text-[10px] font-black uppercase text-indigo-500 tracking-widest mb-2">Reference Question</p>
-                {selectedAssignment.status === 'DRAFT' && draftEdit ? (
-                  <textarea
-                    className="input-style h-32"
-                    value={draftEdit.question}
-                    onChange={e => setDraftEdit({ ...draftEdit, question: e.target.value })}
+      {
+        selectedAssignment && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4 animate-in fade-in duration-300">
+            <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] w-full max-w-2xl p-10 shadow-2xl animate-in zoom-in-95 duration-300">
+              {selectedAssignment.status === 'DRAFT' && draftEdit ? (
+                <div className="space-y-2 mb-3">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Assignment Title</label>
+                  <input
+                    className="input-style"
+                    value={draftEdit.title}
+                    onChange={e => setDraftEdit({ ...draftEdit, title: e.target.value })}
                   />
-                ) : (
-                  <p className="text-slate-600 dark:text-slate-300 font-medium leading-relaxed">{selectedAssignment.question}</p>
-                )}
-              </div>
+                </div>
+              ) : (
+                <h3 className="text-2xl font-black mb-1">{selectedAssignment.title}</h3>
+              )}
+              <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-6">assignment Created on {new Date(selectedAssignment.createdAt).toLocaleDateString()}</p>
 
-              {(selectedAssignment.status === 'DRAFT' || (selectedAssignment.teacherAnswerImages && selectedAssignment.teacherAnswerImages.length > 0) || (draftEdit && (draftEdit.teacherAnswerImages?.length || 0) > 0) || (draftImagePreviews.length > 0)) && (
-                <div className="space-y-3">
-                  <h4 className="text-xl font-black">Question Images</h4>
-                  <div className="flex flex-wrap gap-3">
-                    {(selectedAssignment.status === 'DRAFT' ? (draftEdit?.teacherAnswerImages || []) : (selectedAssignment.teacherAnswerImages || [])).map((img, idx) => (
-                      <div
-                        key={`existing-${idx}`}
-                        className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm cursor-pointer"
-                        onClick={() => window.open(img, '_blank')}
-                        title="Open image"
-                      >
-                        <img src={img} className="w-full h-full object-cover" />
-                        {selectedAssignment.status === 'DRAFT' && draftEdit && (
+              <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2">
+                <div className="bg-slate-50 dark:bg-slate-700/60 p-6 rounded-3xl border border-slate-100 dark:border-slate-700">
+                  <p className="text-[10px] font-black uppercase text-indigo-500 tracking-widest mb-2">Reference Question</p>
+                  {selectedAssignment.status === 'DRAFT' && draftEdit ? (
+                    <textarea
+                      className="input-style h-32"
+                      value={draftEdit.question}
+                      onChange={e => setDraftEdit({ ...draftEdit, question: e.target.value })}
+                    />
+                  ) : (
+                    <p className="text-slate-600 dark:text-slate-300 font-medium leading-relaxed">{selectedAssignment.question}</p>
+                  )}
+                </div>
+
+                {(selectedAssignment.status === 'DRAFT' || (selectedAssignment.teacherAnswerImages && selectedAssignment.teacherAnswerImages.length > 0) || (draftEdit && (draftEdit.teacherAnswerImages?.length || 0) > 0) || (draftImagePreviews.length > 0)) && (
+                  <div className="space-y-3">
+                    <h4 className="text-xl font-black">Question Images</h4>
+                    <div className="flex flex-wrap gap-3">
+                      {(selectedAssignment.status === 'DRAFT' ? (draftEdit?.teacherAnswerImages || []) : (selectedAssignment.teacherAnswerImages || [])).map((img, idx) => (
+                        <div
+                          key={`existing-${idx}`}
+                          className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm cursor-pointer"
+                          onClick={() => window.open(img, '_blank')}
+                          title="Open image"
+                        >
+                          <img src={img} className="w-full h-full object-cover" />
+                          {selectedAssignment.status === 'DRAFT' && draftEdit && (
+                            <button
+                              onClick={() => {
+                                const updatedImages = draftEdit.teacherAnswerImages?.filter((_, i) => i !== idx) || [];
+                                const updatedBase64 = draftEdit.teacherAnswerImagesBase64?.filter((_, i) => i !== idx) || [];
+                                setDraftEdit({
+                                  ...draftEdit,
+                                  teacherAnswerImages: updatedImages,
+                                  teacherAnswerImagesBase64: updatedBase64
+                                });
+                              }}
+                              className="absolute top-1 right-1 bg-white/90 dark:bg-slate-700/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm"
+                              title="Remove image"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      ))}
+
+                      {draftImagePreviews.map((img, idx) => (
+                        <div
+                          key={`new-${idx}`}
+                          className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm cursor-pointer"
+                          onClick={() => window.open(img, '_blank')}
+                          title="Open image"
+                        >
+                          <img src={img} className="w-full h-full object-cover" />
                           <button
                             onClick={() => {
-                              const updatedImages = draftEdit.teacherAnswerImages?.filter((_, i) => i !== idx) || [];
-                              const updatedBase64 = draftEdit.teacherAnswerImagesBase64?.filter((_, i) => i !== idx) || [];
-                              setDraftEdit({
-                                ...draftEdit,
-                                teacherAnswerImages: updatedImages,
-                                teacherAnswerImagesBase64: updatedBase64
-                              });
+                              setDraftImageFiles(draftImageFiles.filter((_, i) => i !== idx));
+                              setDraftImagePreviews(draftImagePreviews.filter((_, i) => i !== idx));
                             }}
                             className="absolute top-1 right-1 bg-white/90 dark:bg-slate-700/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm"
                             title="Remove image"
                           >
                             ✕
                           </button>
-                        )}
-                      </div>
-                    ))}
+                        </div>
+                      ))}
 
-                    {draftImagePreviews.map((img, idx) => (
-                      <div
-                        key={`new-${idx}`}
-                        className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm cursor-pointer"
-                        onClick={() => window.open(img, '_blank')}
-                        title="Open image"
-                      >
-                        <img src={img} className="w-full h-full object-cover" />
-                        <button
-                          onClick={() => {
-                            setDraftImageFiles(draftImageFiles.filter((_, i) => i !== idx));
-                            setDraftImagePreviews(draftImagePreviews.filter((_, i) => i !== idx));
-                          }}
-                          className="absolute top-1 right-1 bg-white/90 dark:bg-slate-700/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm"
-                          title="Remove image"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
-
-                    {selectedAssignment.status === 'DRAFT' && (
-                      <label className="w-24 h-24 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-all hover:border-indigo-400 active:scale-95">
-                        <input type="file" accept="image/*" onChange={handleDraftImageChange} className="hidden" />
-                        <span className="text-3xl text-slate-300 font-light">+</span>
-                      </label>
-                    )}
+                      {selectedAssignment.status === 'DRAFT' && (
+                        <label className="w-24 h-24 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-all hover:border-indigo-400 active:scale-95">
+                          <input type="file" accept="image/*" onChange={handleDraftImageChange} className="hidden" />
+                          <span className="text-3xl text-slate-300 font-light">+</span>
+                        </label>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {selectedAssignment.status === 'DRAFT' && draftEdit && (
-                <div className="space-y-3">
-                  <h4 className="text-xl font-black">Marking Criteria</h4>
-                  <div className="space-y-2">
-                    {draftEdit.markingPoints.map((c, i) => (
-                      <div key={i} className="flex gap-2 items-center bg-slate-50 dark:bg-slate-700/60 p-3 rounded-xl border border-slate-100 dark:border-slate-700">
-                        <span className="text-xs font-black text-indigo-600 bg-white dark:bg-slate-800 w-6 h-6 rounded-lg flex items-center justify-center shadow-sm">{i + 1}</span>
-                        <input
-                          className="bg-transparent border-none text-sm font-bold flex-1 focus:ring-0"
-                          value={c.point}
-                          onChange={e => {
-                            const updated = [...draftEdit.markingPoints];
-                            updated[i] = { ...updated[i], point: e.target.value };
-                            setDraftEdit({ ...draftEdit, markingPoints: updated });
-                          }}
-                        />
-                        <input
-                          type="number"
-                          className="w-16 bg-white dark:bg-slate-800 border-none rounded-lg text-sm font-black text-center focus:ring-1 focus:ring-indigo-500"
-                          value={c.weight}
-                          onChange={e => {
-                            const updated = [...draftEdit.markingPoints];
-                            updated[i] = { ...updated[i], weight: parseInt(e.target.value) || 0 };
-                            setDraftEdit({ ...draftEdit, markingPoints: updated });
-                          }}
-                        />
-                        <button
-                          onClick={() => {
-                            const updated = draftEdit.markingPoints.filter((_, idx) => idx !== i);
-                            setDraftEdit({ ...draftEdit, markingPoints: updated });
-                          }}
-                          className="w-6 h-6 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 flex items-center justify-center transition-colors"
-                          title="Delete criterion"
-                        >
-                          ✕
-                        </button>
+                {selectedAssignment.status === 'DRAFT' && draftEdit && (
+                  <div className="space-y-3">
+                    <h4 className="text-xl font-black">Marking Criteria</h4>
+                    <div className="space-y-2">
+                      {draftEdit.markingPoints.map((c, i) => (
+                        <div key={i} className="flex gap-2 items-center bg-slate-50 dark:bg-slate-700/60 p-3 rounded-xl border border-slate-100 dark:border-slate-700">
+                          <span className="text-xs font-black text-indigo-600 bg-white dark:bg-slate-800 w-6 h-6 rounded-lg flex items-center justify-center shadow-sm">{i + 1}</span>
+                          <input
+                            className="bg-transparent border-none text-sm font-bold flex-1 focus:ring-0"
+                            value={c.point}
+                            onChange={e => {
+                              const updated = [...draftEdit.markingPoints];
+                              updated[i] = { ...updated[i], point: e.target.value };
+                              setDraftEdit({ ...draftEdit, markingPoints: updated });
+                            }}
+                          />
+                          <input
+                            type="number"
+                            className="w-16 bg-white dark:bg-slate-800 border-none rounded-lg text-sm font-black text-center focus:ring-1 focus:ring-indigo-500"
+                            value={c.weight}
+                            onChange={e => {
+                              const updated = [...draftEdit.markingPoints];
+                              updated[i] = { ...updated[i], weight: parseInt(e.target.value) || 0 };
+                              setDraftEdit({ ...draftEdit, markingPoints: updated });
+                            }}
+                          />
+                          <button
+                            onClick={() => {
+                              const updated = draftEdit.markingPoints.filter((_, idx) => idx !== i);
+                              setDraftEdit({ ...draftEdit, markingPoints: updated });
+                            }}
+                            className="w-6 h-6 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 flex items-center justify-center transition-colors"
+                            title="Delete criterion"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        onClick={() => setDraftEdit({ ...draftEdit, markingPoints: [...draftEdit.markingPoints, { point: '', weight: 1 }] })}
+                        className="w-full py-2 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-400 hover:border-indigo-400 hover:text-indigo-400 transition-all"
+                      >
+                        + Add Rule
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-4">
+                  <h4 className="text-xl font-black">Student Submissions</h4>
+
+                  {(() => {
+                    const assignmentSubmissions = submissions.filter(s => s.assignmentId === selectedAssignment.id);
+                    const submittedCount = assignmentSubmissions.length;
+                    const uniqueStudentIds = new Set(assignmentSubmissions.map(s => s.studentId));
+                    const uniqueSubmittedCount = uniqueStudentIds.size;
+
+                    // Get total students in the class
+                    const assignmentClass = classData[selectedAssignment.classId];
+                    const totalStudents = assignmentClass?.studentIds?.length || 0;
+                    const pendingCount = totalStudents - uniqueSubmittedCount;
+
+                    return (
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-emerald-50 dark:bg-emerald-950/20 border-2 border-emerald-200 dark:border-emerald-900 rounded-2xl p-6 text-center">
+                          <div className="text-4xl font-black text-emerald-600 dark:text-emerald-400 mb-2">{submittedCount}</div>
+                          <p className="text-xs font-bold text-emerald-600/70 dark:text-emerald-400/70 uppercase tracking-widest">Submitted</p>
+                        </div>
+                        <div className="bg-amber-50 dark:bg-amber-950/20 border-2 border-amber-200 dark:border-amber-900 rounded-2xl p-6 text-center">
+                          <div className="text-4xl font-black text-amber-600 dark:text-amber-400 mb-2">
+                            {pendingCount >= 0 ? pendingCount : '—'}
+                          </div>
+                          <p className="text-xs font-bold text-amber-600/70 dark:text-amber-400/70 uppercase tracking-widest">Pending</p>
+                        </div>
                       </div>
-                    ))}
+                    );
+                  })()}
+                </div>
+              </div>
+
+              <div className="pt-8 mt-4 border-t border-slate-100 dark:border-slate-700">
+                {selectedAssignment.status === 'DRAFT' ? (
+                  <div className="flex gap-4">
                     <button
-                      onClick={() => setDraftEdit({ ...draftEdit, markingPoints: [...draftEdit.markingPoints, { point: '', weight: 1 }] })}
-                      className="w-full py-2 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-400 hover:border-indigo-400 hover:text-indigo-400 transition-all"
+                      onClick={() => setSelectedAssignment(null)}
+                      className="flex-1 py-4 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-600 transition-all active:scale-95"
                     >
-                      + Add Rule
+                      Close
+                    </button>
+                    <button
+                      disabled={isSaving || !draftEdit}
+                      onClick={async () => {
+                        if (!draftEdit) return;
+                        setIsSaving(true);
+                        try {
+                          await persistDraft('DRAFT');
+                          alert('Draft updated!');
+                        } catch (err: any) {
+                          alert('Failed to update draft: ' + err.message);
+                        } finally {
+                          setIsSaving(false);
+                        }
+                      }}
+                      className="flex-1 py-4 bg-slate-900 dark:bg-slate-200 text-white dark:text-slate-900 rounded-2xl font-black shadow-xl transition-all active:scale-95 disabled:opacity-50"
+                    >
+                      {isSaving ? 'Saving...' : 'Save Changes'}
+                    </button>
+                    <button
+                      disabled={isSaving}
+                      onClick={async () => {
+                        setIsSaving(true);
+                        try {
+                          const updatedAssignment = await persistDraft('PUBLISHED');
+                          setSelectedAssignment(null);
+                          alert('Assignment published successfully!');
+                        } catch (err: any) {
+                          alert('Failed to publish: ' + err.message);
+                        } finally {
+                          setIsSaving(false);
+                        }
+                      }}
+                      className="flex-[2] py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
+                    >
+                      {isSaving ? 'Publishing...' : '📢 Publish Now'}
                     </button>
                   </div>
-                </div>
-              )}
-
-              <div className="space-y-4">
-                <h4 className="text-xl font-black">Student Submissions</h4>
-
-                {(() => {
-                  const assignmentSubmissions = submissions.filter(s => s.assignmentId === selectedAssignment.id);
-                  const submittedCount = assignmentSubmissions.length;
-                  const uniqueStudentIds = new Set(assignmentSubmissions.map(s => s.studentId));
-                  const uniqueSubmittedCount = uniqueStudentIds.size;
-
-                  // Get total students in the class
-                  const assignmentClass = classData[selectedAssignment.classId];
-                  const totalStudents = assignmentClass?.studentIds?.length || 0;
-                  const pendingCount = totalStudents - uniqueSubmittedCount;
-
-                  return (
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-emerald-50 dark:bg-emerald-950/20 border-2 border-emerald-200 dark:border-emerald-900 rounded-2xl p-6 text-center">
-                        <div className="text-4xl font-black text-emerald-600 dark:text-emerald-400 mb-2">{submittedCount}</div>
-                        <p className="text-xs font-bold text-emerald-600/70 dark:text-emerald-400/70 uppercase tracking-widest">Submitted</p>
-                      </div>
-                      <div className="bg-amber-50 dark:bg-amber-950/20 border-2 border-amber-200 dark:border-amber-900 rounded-2xl p-6 text-center">
-                        <div className="text-4xl font-black text-amber-600 dark:text-amber-400 mb-2">
-                          {pendingCount >= 0 ? pendingCount : '—'}
-                        </div>
-                        <p className="text-xs font-bold text-amber-600/70 dark:text-amber-400/70 uppercase tracking-widest">Pending</p>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-
-            <div className="pt-8 mt-4 border-t border-slate-100 dark:border-slate-700">
-              {selectedAssignment.status === 'DRAFT' ? (
-                <div className="flex gap-4">
+                ) : (
                   <button
                     onClick={() => setSelectedAssignment(null)}
-                    className="flex-1 py-4 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-600 transition-all active:scale-95"
+                    className="w-full py-4 bg-slate-900 dark:bg-indigo-600 text-white rounded-2xl font-black shadow-xl transition-all active:scale-95"
                   >
-                    Close
-                  </button>
-                  <button
-                    disabled={isSaving || !draftEdit}
-                    onClick={async () => {
-                      if (!draftEdit) return;
-                      setIsSaving(true);
-                      try {
-                        await persistDraft('DRAFT');
-                        alert('Draft updated!');
-                      } catch (err: any) {
-                        alert('Failed to update draft: ' + err.message);
-                      } finally {
-                        setIsSaving(false);
-                      }
-                    }}
-                    className="flex-1 py-4 bg-slate-900 dark:bg-slate-200 text-white dark:text-slate-900 rounded-2xl font-black shadow-xl transition-all active:scale-95 disabled:opacity-50"
-                  >
-                    {isSaving ? 'Saving...' : 'Save Changes'}
-                  </button>
-                  <button
-                    disabled={isSaving}
-                    onClick={async () => {
-                      setIsSaving(true);
-                      try {
-                        const updatedAssignment = await persistDraft('PUBLISHED');
-                        setSelectedAssignment(null);
-                        alert('Assignment published successfully!');
-                      } catch (err: any) {
-                        alert('Failed to publish: ' + err.message);
-                      } finally {
-                        setIsSaving(false);
-                      }
-                    }}
-                    className="flex-[2] py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
-                  >
-                    {isSaving ? 'Publishing...' : '📢 Publish Now'}
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => setSelectedAssignment(null)}
-                  className="w-full py-4 bg-slate-900 dark:bg-indigo-600 text-white rounded-2xl font-black shadow-xl transition-all active:scale-95"
-                >
-                  Return to Dashboard
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showAdd && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4 animate-in fade-in duration-300">
-          <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] w-full max-w-2xl p-10 shadow-2xl overflow-y-auto max-h-[90vh] animate-in zoom-in-95 duration-300">
-            <h3 className="text-3xl font-black mb-8">Create Assignment assignment</h3>
-            <div className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Class</label>
-                  <select className="input-style" value={selectedClassId} onChange={e => setSelectedClassId(e.target.value)}>
-                    <option value="">Select Class</option>
-                    {teacher?.assignedClassId && <option value={teacher.assignedClassId}>{classNames[teacher.assignedClassId] || teacher.assignedClassId} (Class Teacher)</option>}
-                    {teacher?.assignedSubjects.map((s, i) => (
-                      <option key={i} value={s.classId}>{classNames[s.classId] || s.classId} ({subjectNames[s.subjectId] || s.subjectId})</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Subject</label>
-                  <select className="input-style" value={selectedSubjectId} onChange={e => setSelectedSubjectId(e.target.value)}>
-                    <option value="">Select Subject</option>
-                    {teacher?.primarySubject && !uniqueAssignedSubjects.some(s => s.name === teacher.primarySubject) && (
-                      <option value={teacher.primarySubject}>{teacher.primarySubject}</option>
-                    )}
-                    {uniqueAssignedSubjects.map((s, i) => (
-                      <option key={i} value={s.id}>{s.name}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Assignment Title</label>
-                <input className="input-style" placeholder="Ex: Physics Mid-term" value={title} onChange={e => setTitle(e.target.value)} />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Question / Instructions</label>
-                <textarea className="input-style h-40" placeholder="Enter the full question text here..." value={question} onChange={e => setQuestion(e.target.value)} />
-              </div>
-
-              <div className="space-y-4">
-                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Correct Solution (Reference Images)</label>
-                <div className="flex flex-wrap gap-3">
-                  {referenceImageUrls.map((img, idx) => (
-                    <div key={idx} className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm animate-in zoom-in duration-200">
-                      <img src={img} className="w-full h-full object-cover" />
-                      <button onClick={() => {
-                        setReferenceImages(referenceImages.filter((_, i) => i !== idx));
-                        setReferenceImageUrls(referenceImageUrls.filter((_, i) => i !== idx));
-                      }} className="absolute top-1 right-1 bg-white/90 dark:bg-slate-700/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm">✕</button>
-                    </div>
-                  ))}
-                  <label className="w-24 h-24 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-all hover:border-indigo-400 active:scale-95">
-                    <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
-                    <span className="text-3xl text-slate-300 font-light">+</span>
-                  </label>
-                </div>
-                {referenceImageUrls.length > 0 && criteria.length === 0 && (
-                  <button onClick={handleExtractCriteria} disabled={isExtracting} className={`w-full py-3 ${isExtracting ? 'bg-slate-100 dark:bg-slate-700 animate-pulse text-slate-400' : 'bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300'} rounded-2xl text-sm font-black uppercase tracking-widest transition-all`}>
-                    {isExtracting ? 'AI Analyzing Reference...' : '✨ Auto-Extract Marking Points'}
+                    Return to Dashboard
                   </button>
                 )}
               </div>
+            </div>
+          </div>
+        )
+      }
 
-              {criteria.length > 0 && (
-                <div className="space-y-3">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Marking Criteria & Weights</label>
+      {
+        showAdd && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4 animate-in fade-in duration-300">
+            <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] w-full max-w-2xl p-10 shadow-2xl overflow-y-auto max-h-[90vh] animate-in zoom-in-95 duration-300">
+              <h3 className="text-3xl font-black mb-8">Create Assignment assignment</h3>
+              <div className="space-y-6">
+                <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    {criteria.map((c, i) => (
-                      <div key={i} className="flex gap-2 items-center bg-slate-50 dark:bg-slate-700/60 p-3 rounded-xl border border-slate-100 dark:border-slate-700 animate-in slide-in-from-left duration-200" style={{ animationDelay: `${i * 50}ms` }}>
-                        <span className="text-xs font-black text-indigo-600 bg-white dark:bg-slate-800 w-6 h-6 rounded-lg flex items-center justify-center shadow-sm">{i + 1}</span>
-                        <input className="bg-transparent border-none text-sm font-bold flex-1 focus:ring-0" value={c.point} onChange={e => {
-                          const newC = [...criteria];
-                          newC[i].point = e.target.value;
-                          setCriteria(newC);
-                        }} />
-                        <input type="number" className="w-16 bg-white dark:bg-slate-800 border-none rounded-lg text-sm font-black text-center focus:ring-1 focus:ring-indigo-500" value={c.weight} onChange={e => {
-                          const newC = [...criteria];
-                          newC[i].weight = parseInt(e.target.value) || 0;
-                          setCriteria(newC);
-                        }} />
-                        <button
-                          onClick={() => setCriteria(criteria.filter((_, idx) => idx !== i))}
-                          className="w-6 h-6 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 flex items-center justify-center transition-colors"
-                          title="Delete criterion"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
-                    <button onClick={() => setCriteria([...criteria, { point: '', weight: 1 }])} className="w-full py-2 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-400 hover:border-indigo-400 hover:text-indigo-400 transition-all">+ Add Rule</button>
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Class</label>
+                    <select className="input-style" value={selectedClassId} onChange={e => setSelectedClassId(e.target.value)}>
+                      <option value="">Select Class</option>
+                      {teacher?.assignedClassId && <option value={teacher.assignedClassId}>{classNames[teacher.assignedClassId] || teacher.assignedClassId} (Class Teacher)</option>}
+                      {teacher?.assignedSubjects.map((s, i) => (
+                        <option key={i} value={s.classId}>{classNames[s.classId] || s.classId} ({subjectNames[s.subjectId] || s.subjectId})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Subject</label>
+                    <select className="input-style" value={selectedSubjectId} onChange={e => setSelectedSubjectId(e.target.value)}>
+                      <option value="">Select Subject</option>
+                      {teacher?.primarySubject && !uniqueAssignedSubjects.some(s => s.name === teacher.primarySubject) && (
+                        <option value={teacher.primarySubject}>{teacher.primarySubject}</option>
+                      )}
+                      {uniqueAssignedSubjects.map((s, i) => (
+                        <option key={i} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
-              )}
 
-              <div className="flex gap-4 pt-8">
-                <button
-                  onClick={() => setShowAdd(false)}
-                  className="flex-1 py-4 text-slate-500 font-bold hover:bg-slate-50 dark:hover:bg-slate-800 rounded-2xl transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  disabled={isSaving}
-                  onClick={() => handleSave('DRAFT')}
-                  className="flex-1 py-4 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-2xl font-bold shadow-sm transition-all active:scale-95 disabled:opacity-50"
-                >
-                  {isSaving ? 'Saving...' : 'Save Draft'}
-                </button>
-                <button
-                  disabled={isSaving}
-                  onClick={() => handleSave('PUBLISHED')}
-                  className="flex-[2] py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
-                >
-                  {isSaving ? 'Publishing...' : 'Publish assignment'}
-                </button>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Assignment Title</label>
+                  <input className="input-style" placeholder="Ex: Physics Mid-term" value={title} onChange={e => setTitle(e.target.value)} />
+                </div>
+
+                <div className="flex gap-4">
+                  <div className="space-y-2 flex-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Due Date (Optional)</label>
+                    <input
+                      type="datetime-local"
+                      className="input-style w-full"
+                      value={dueDate}
+                      onChange={e => setDueDate(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2 flex-1 flex flex-col justify-end pb-3">
+                    <label className="flex items-center gap-3 cursor-pointer group">
+                      <input
+                        type="checkbox"
+                        checked={allowLate}
+                        onChange={e => setAllowLate(e.target.checked)}
+                        className="w-5 h-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 transition-all"
+                      />
+                      <span className="text-sm font-bold text-slate-600 dark:text-slate-300 group-hover:text-indigo-600 transition-colors">Allow Late Submissions</span>
+                    </label>
+                    <p className="text-[10px] text-slate-400 pl-8">If disabled, students strictly cannot submit after deadline.</p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Question / Instructions</label>
+                  <textarea className="input-style h-40" placeholder="Enter the full question text here..." value={question} onChange={e => setQuestion(e.target.value)} />
+                </div>
+
+                <div className="space-y-4">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Correct Solution (Reference Images)</label>
+                  <div className="flex flex-wrap gap-3">
+                    {referenceImageUrls.map((img, idx) => (
+                      <div key={idx} className="relative w-24 h-24 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm animate-in zoom-in duration-200">
+                        <img src={img} className="w-full h-full object-cover" />
+                        <button onClick={() => {
+                          setReferenceImages(referenceImages.filter((_, i) => i !== idx));
+                          setReferenceImageUrls(referenceImageUrls.filter((_, i) => i !== idx));
+                        }} className="absolute top-1 right-1 bg-white/90 dark:bg-slate-700/90 rounded-full w-5 h-5 text-xs flex items-center justify-center shadow-sm">✕</button>
+                      </div>
+                    ))}
+                    <label className="w-24 h-24 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-all hover:border-indigo-400 active:scale-95">
+                      <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
+                      <span className="text-3xl text-slate-300 font-light">+</span>
+                    </label>
+                  </div>
+                  {referenceImageUrls.length > 0 && criteria.length === 0 && (
+                    <button onClick={handleExtractCriteria} disabled={isExtracting} className={`w-full py-3 ${isExtracting ? 'bg-slate-100 dark:bg-slate-700 animate-pulse text-slate-400' : 'bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300'} rounded-2xl text-sm font-black uppercase tracking-widest transition-all`}>
+                      {isExtracting ? 'AI Analyzing Reference...' : '✨ Auto-Extract Marking Points'}
+                    </button>
+                  )}
+                </div>
+
+                {criteria.length > 0 && (
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Marking Criteria & Weights</label>
+                    <div className="space-y-2">
+                      {criteria.map((c, i) => (
+                        <div key={i} className="flex gap-2 items-center bg-slate-50 dark:bg-slate-700/60 p-3 rounded-xl border border-slate-100 dark:border-slate-700 animate-in slide-in-from-left duration-200" style={{ animationDelay: `${i * 50}ms` }}>
+                          <span className="text-xs font-black text-indigo-600 bg-white dark:bg-slate-800 w-6 h-6 rounded-lg flex items-center justify-center shadow-sm">{i + 1}</span>
+                          <input className="bg-transparent border-none text-sm font-bold flex-1 focus:ring-0" value={c.point} onChange={e => {
+                            const newC = [...criteria];
+                            newC[i].point = e.target.value;
+                            setCriteria(newC);
+                          }} />
+                          <input type="number" className="w-16 bg-white dark:bg-slate-800 border-none rounded-lg text-sm font-black text-center focus:ring-1 focus:ring-indigo-500" value={c.weight} onChange={e => {
+                            const newC = [...criteria];
+                            newC[i].weight = parseInt(e.target.value) || 0;
+                            setCriteria(newC);
+                          }} />
+                          <button
+                            onClick={() => setCriteria(criteria.filter((_, idx) => idx !== i))}
+                            className="w-6 h-6 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 flex items-center justify-center transition-colors"
+                            title="Delete criterion"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                      <button onClick={() => setCriteria([...criteria, { point: '', weight: 1 }])} className="w-full py-2 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-400 hover:border-indigo-400 hover:text-indigo-400 transition-all">+ Add Rule</button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-4 pt-8">
+                  <button
+                    onClick={() => setShowAdd(false)}
+                    className="flex-1 py-4 text-slate-500 font-bold hover:bg-slate-50 dark:hover:bg-slate-800 rounded-2xl transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    disabled={isSaving}
+                    onClick={() => handleSave('DRAFT')}
+                    className="flex-1 py-4 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-2xl font-bold shadow-sm transition-all active:scale-95 disabled:opacity-50"
+                  >
+                    {isSaving ? 'Saving...' : 'Save Draft'}
+                  </button>
+                  <button
+                    disabled={isSaving}
+                    onClick={() => handleSave('PUBLISHED')}
+                    className="flex-[2] py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
+                  >
+                    {isSaving ? 'Publishing...' : 'Publish assignment'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )
+      }
+    </div >
   );
 };
 
@@ -1015,8 +1271,34 @@ const markdownToHtml = (markdown: string, isDarkMode: boolean = false): string =
   mask(/^\|(.+)\n\|[-\s:|]+\n((?:\|.+\n?)*)/gm, (match) => { // Added ^ anchor and multiline flag
     const lines = match.trim().split('\n').filter(line => line.trim());
     if (lines.length < 2) return match;
-    const headerRow = lines[0].split('|').map(cell => cell.trim()).filter(Boolean);
-    const bodyRows = lines.slice(2).map(line => line.split('|').map(cell => cell.trim()).filter(Boolean));
+
+    // Helper to process cell content (math, bold, italic) since tables are masked before global processing
+    const processCell = (content: string) => {
+      let processed = content.trim();
+      // Render Inline Math ($...$)
+      processed = processed.replace(/\$([^$\n]+?)\$/g, (_, latex) => {
+        try {
+          return katex.renderToString(latex.trim(), { displayMode: false, throwOnError: false, trust: true });
+        } catch (e) { return _; }
+      });
+      // Render Bold (**...**)
+      processed = processed.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      // Render Italic (*...*)
+      processed = processed.replace(/\*(.*?)\*/g, '<em>$1</em>');
+      return processed;
+    };
+
+    const headerRow = lines[0].split('|').map(cell => processCell(cell)).filter(c => c !== '');
+    // Note: slice(2) skips header and separator line
+    const bodyRows = lines.slice(2).map(line => {
+      // Split by pipe but ignore escaped pipes if possible (simple split for now)
+      return line.split('|').map(cell => processCell(cell)).filter((_, i, arr) => {
+        // Filter empty start/end cells caused by leading/trailing pipes
+        if (i === 0 && _ === '') return false;
+        if (i === arr.length - 1 && _ === '') return false;
+        return true;
+      });
+    });
 
     let table = `<div style="overflow-x: auto; margin: 20px 0;"><table style="width: 100%; border-collapse: collapse; border: 1px solid ${darkStyles.tableBorder}; border-radius: 8px;">`;
     table += `<thead><tr style="background-color: ${darkStyles.tableHeaderBg}; border-bottom: 2px solid ${darkStyles.tableBorder};">`;
@@ -1073,7 +1355,69 @@ const markdownToHtml = (markdown: string, isDarkMode: boolean = false): string =
 
   html = html
     // Images
-    .replace(/!\[(.*?)\]\((.*?)\)/g, `<div style="margin: 24px 0; text-align: center;"><img src="$2" alt="$1" style="max-width: 100%; height: auto; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1);" /><p style="font-size: 0.8em; color: gray; margin-top: 8px; font-style: italic;">$1</p></div>`)
+    // Images - Add group for relative positioning of crop button
+    // Images - Add group for relative positioning of crop button
+    // Images - Add group for relative positioning of crop button
+    .replace(/!\[(.*?)\]\((.*?)\)/g, (_, alt, src) => {
+      let urlObj: URL;
+      try {
+        urlObj = new URL(src);
+      } catch (e) {
+        // Fallback for relative URLs if any (though typically we use absolute)
+        urlObj = new URL(src, window.location.origin);
+      }
+
+      const params = urlObj.searchParams;
+      const crop = params.get('crop');
+
+      // Remove crop param for the display URL so it doesn't mess with backend if not supported
+      // But KEEP other params like Firebase tokens!
+      params.delete('crop');
+      const displayUrl = urlObj.toString();
+
+      // For the crop button data-src, we generally want the clean URL too
+      const cleanSrc = displayUrl;
+
+      let styles = 'max-width: 100%; height: auto; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1); cursor: pointer;';
+      let containerStyles = 'margin: 24px 0; text-align: center; position: relative; display: inline-block;';
+      let imgStyles = styles;
+
+      if (crop) {
+        // Parse ymin,xmin,ymax,xmax (0-1000 scale)
+        const [ymin, xmin, ymax, xmax] = crop.split(',').map(Number);
+
+        if (!isNaN(ymin) && !isNaN(xmin) && !isNaN(ymax) && !isNaN(xmax)) {
+          // Calculate percentages
+          const width = xmax - xmin;
+          const height = ymax - ymin;
+
+          // Virtual crop container
+          containerStyles += ` overflow: hidden; width: 100%; max-width: 600px; aspect-ratio: ${width}/${height}; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1);`;
+
+          // Image positioning to "zoom" into the crop area
+          // Scale: 1000 / width * 100%
+          const scaleX = (1000 / width) * 100;
+          const scaleY = (1000 / height) * 100;
+
+          // Position: -xmin% * scale
+          // Actually simpler: 
+          // object-fit: none (or cover with specific position?)
+          // Standard CSS masking technique:
+          // inner img width = (1000/width) * 100 % of container
+          // margin-left = -(xmin/width) * 100 %
+
+          imgStyles = `width: ${(1000 / width) * 100}%; max-width: none; height: ${(1000 / height) * 100}%; margin-top: -${(ymin / height) * 100}%; margin-left: -${(xmin / width) * 100}%; display: block;`;
+        }
+      }
+
+      return `<div class="group" style="${containerStyles}">
+         <img src="${displayUrl}" alt="${alt}" data-role="editable-image" style="${imgStyles}" />
+         <button class="crop-btn absolute top-2 right-2 bg-black/70 hover:bg-black/90 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm z-10" title="Crop Image" data-src="${cleanSrc}">
+           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/><path d="M22 6L2 22"/></svg>
+         </button>
+         ${!crop ? `<p style="font-size: 0.8em; color: gray; margin-top: 8px; font-style: italic;">${alt}</p>` : ''}
+       </div>`;
+    })
     // Paragraphs - Transform remaining text but ignore our specific placeholders if they happen to appear (unlikely but safe)
     .replace(/\n\n/g, '<div style="margin-bottom: 20px;"></div>')
     .replace(/^(?!<[hluibprt]|\u0000|<div)(.+)$/gm, (match) => { // Modified negative lookahead to include \u0000
@@ -1091,9 +1435,33 @@ const markdownToHtml = (markdown: string, isDarkMode: boolean = false): string =
   return `<div class="enhanced-note-content" style="font-family: 'Inter', system-ui, sans-serif; line-height: 1.6; color: ${darkStyles.textColor};">${html}</div>`;
 };
 
-const MarkdownRenderer: React.FC<{ content: string; isDarkMode: boolean }> = ({ content, isDarkMode }) => {
+const MarkdownRenderer: React.FC<{
+  content: string;
+  isDarkMode: boolean;
+  onCrop?: (src: string) => void;
+}> = ({ content, isDarkMode, onCrop }) => {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const html = React.useMemo(() => markdownToHtml(content, isDarkMode), [content, isDarkMode]);
+
+  React.useEffect(() => {
+    // Event delegation for crop buttons
+    const handleCropClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const btn = target.closest('.crop-btn');
+      if (btn && onCrop) {
+        const src = btn.getAttribute('data-src');
+        if (src) onCrop(src);
+      }
+    };
+
+    const container = containerRef.current;
+    if (container) {
+      container.addEventListener('click', handleCropClick);
+    }
+    return () => {
+      if (container) container.removeEventListener('click', handleCropClick);
+    };
+  }, [onCrop]);
 
   React.useEffect(() => {
     console.log('[MarkdownRenderer] Effect triggered');
@@ -1267,6 +1635,67 @@ const MarkdownRenderer: React.FC<{ content: string; isDarkMode: boolean }> = ({ 
   />;
 };
 
+// --- Crop Modal Component ---
+const CropModal: React.FC<{
+  imageSrc: string;
+  onClose: () => void;
+  onCropComplete: (croppedAreaPixels: any) => void;
+}> = ({ imageSrc, onClose, onCropComplete }) => {
+  const [crop, setCrop] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [croppedAreaPixels, setCroppedAreaPixels] = useState(null);
+
+  return (
+    <div className="fixed inset-0 z-[70] bg-black/80 flex items-center justify-center p-4">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
+          <h3 className="text-lg font-bold">Crop Image</h3>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="relative h-[50vh] bg-slate-100 dark:bg-black/50">
+          <Cropper
+            image={imageSrc}
+            crop={crop}
+            zoom={zoom}
+            aspect={undefined} // Free crop
+            onCropChange={setCrop}
+            onCropComplete={(_, croppedAreaPixels) => setCroppedAreaPixels(croppedAreaPixels)}
+            onZoomChange={setZoom}
+          />
+        </div>
+
+        <div className="p-4 flex gap-4 items-center justify-end border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+          <div className="flex-1">
+            <label className="text-xs font-semibold mb-1 block">Zoom</label>
+            <input
+              type="range"
+              value={zoom}
+              min={1}
+              max={3}
+              step={0.1}
+              aria-labelledby="Zoom"
+              onChange={(e) => setZoom(Number(e.target.value))}
+              className="w-full"
+            />
+          </div>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">
+            Cancel
+          </button>
+          <button
+            onClick={() => onCropComplete(croppedAreaPixels)}
+            className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-lg shadow-indigo-100 dark:shadow-none"
+          >
+            Save Crop
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- Presentation Mode Component ---
 const PresentationView: React.FC<{
   content: string;
@@ -1417,7 +1846,9 @@ const TeacherNotes: React.FC<{
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [correctionPrompt, setCorrectionPrompt] = useState('');
+  const [correctionImages, setCorrectionImages] = useState<string[]>([]);
   const [isApplyingCorrection, setIsApplyingCorrection] = useState(false);
+  const [croppingImageSrc, setCroppingImageSrc] = useState<string | null>(null);
   const [extractedPDFContent, setExtractedPDFContent] = useState<{ text: string; images: ExtractedImage[] } | null>(null);
   const [isExtractingPDF, setIsExtractingPDF] = useState(false);
   const [suggestedModuleTitle, setSuggestedModuleTitle] = useState('');
@@ -1503,6 +1934,22 @@ const TeacherNotes: React.FC<{
     reader.readAsDataURL(file);
   };
 
+  const handleCorrectionImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files) {
+      const newFiles = Array.from(event.target.files) as File[];
+
+      newFiles.forEach(file => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          if (typeof reader.result === 'string') {
+            setCorrectionImages(prev => [...prev, reader.result as string]);
+          }
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+  };
+
   const handleAnalyze = async () => {
     if (!selectedClassId || !selectedSubjectId || noteBase64s.length === 0) {
       alert('Please select class, subject, and upload a note.');
@@ -1539,7 +1986,8 @@ const TeacherNotes: React.FC<{
 
       // Extract PDF content (text + images)
       let extractedText = '';
-      let pageImages: Array<{ pageNumber: number; url: string }> = [];
+      // Updated to include raw imageData for AI context
+      let pageImages: Array<{ pageNumber: number; url: string; imageData: string }> = [];
 
       try {
         const allExtractedContent = await Promise.all(
@@ -1548,7 +1996,7 @@ const TeacherNotes: React.FC<{
 
         extractedText = allExtractedContent.map(c => c.text).join('\n\n');
         pageImages = allExtractedContent.flatMap(c =>
-          c.images.map(img => ({ pageNumber: img.pageNumber, url: img.url }))
+          c.images.map(img => ({ pageNumber: img.pageNumber, url: img.url, imageData: img.imageData }))
         );
 
         setExtractedPDFContent({
@@ -1592,19 +2040,16 @@ const TeacherNotes: React.FC<{
 
       // Use a single comprehensive regex that captures any format
       pageImages.forEach(img => {
-        const replacement = `![Page ${img.pageNumber} from textbook](${img.url})`;
+        // Updated regex to catch loose formats: [IMAGE:Page X | coords], IMAGE:Page X | coords, with spaces
+        // Optional brackets, allowed spaces around pipe and numbers
+        const regex = new RegExp(`\\[?IMAGE:page[_\\s]?${img.pageNumber}(?:\\s*\\|\\s*([\\d,\\s]+))?\\]?`, 'gi');
 
-        // Match all variations: [IMAGE:page_1], [IMAGE:page 1], [Image:page1], etc.
-        // Case-insensitive, with or without underscore/space
-        const regex = new RegExp(`\\[IMAGE:page[_\\s]?${img.pageNumber}\\]`, 'gi');
-
-        const beforeCount = (processedContent.match(regex) || []).length;
-        processedContent = processedContent.replace(regex, replacement);
-        const afterCount = (processedContent.match(regex) || []).length;
-
-        if (beforeCount > 0) {
-          console.log(`Replaced ${beforeCount} occurrences of page ${img.pageNumber} image markers`);
-        }
+        // Replacement function to handle the captured coords
+        processedContent = processedContent.replace(regex, (match, coords) => {
+          // If coords exist, append as query param for the frontend renderer to pick up
+          const url = coords ? `${img.url}?crop=${coords.replace(/\s/g, '')}` : img.url;
+          return `![Page ${img.pageNumber} diagram](${url})`;
+        });
       });
 
       setEnhancedNote(processedContent);
@@ -1643,7 +2088,10 @@ const TeacherNotes: React.FC<{
         teacherId,
         subjectId: selectedSubjectId,
         classId: selectedClassId,
+        className: classNames[selectedClassId] || selectedClassId,
+        subjectName: subjectNames[selectedSubjectId] || selectedSubjectId,
         content: enhancedNote,
+        summary: summary || 'No summary available',
         moduleTitle: moduleTitle.trim(),
         isLatest: true,
         groupId: editingGroupId || undefined
@@ -1731,21 +2179,93 @@ const TeacherNotes: React.FC<{
   };
 
   const handleApplyCorrection = async () => {
-    if (!enhancedNote || !correctionPrompt.trim()) {
-      alert('Please provide a correction instruction.');
-      return;
-    }
+    if (!enhancedNote || !correctionPrompt.trim()) return;
 
     setIsApplyingCorrection(true);
     try {
-      const correctedContent = await applyNoteCorrection(enhancedNote, correctionPrompt);
-      setEnhancedNote(correctedContent);
+      // 1. Upload correction images to get public URLs
+      const imageUrls: string[] = [];
+      if (correctionImages.length > 0) {
+        try {
+          const uploads = await Promise.all(correctionImages.map((img, idx) =>
+            uploadBase64ToStorage(img, teacherId, `correction_${Date.now()}_${idx}`)
+          ));
+          imageUrls.push(...uploads);
+        } catch (uploadErr) {
+          console.error("Failed to upload correction images", uploadErr);
+          // Proceed without images if upload fails? Or warn?
+          // For now proceed, but AI won't link them properly.
+        }
+      }
+
+      const newContent = await applyNoteCorrection(enhancedNote, correctionPrompt, correctionImages, imageUrls);
+
+      const summary = await extractCorrectionSummary(enhancedNote, newContent);
+
+      // Save the correction
+      const correction: NoteCorrection = {
+        id: crypto.randomUUID(),
+        originalContent: enhancedNote,
+        correctedContent: newContent,
+        correctionPrompt,
+        correctionSummary: summary,
+        timestamp: Date.now(),
+        teacherId
+      };
+
+      // Update DB
+      await dbService.saveNoteCorrection(adminId, selectedSubjectId, selectedClassId, correction);
+
+      setEnhancedNote(newContent);
       setCorrectionPrompt('');
+      setCorrectionImages([]); // Clear images after application
       alert('✅ Correction applied! Review the changes below.');
     } catch (err: any) {
       alert('Failed to apply correction: ' + err.message);
     } finally {
       setIsApplyingCorrection(false);
+    }
+  };
+
+  const handleCropClick = (src: string) => {
+    setCroppingImageSrc(src);
+  };
+
+  const handleCropComplete = async (croppedAreaPixels: any) => {
+    if (!croppingImageSrc || !croppedAreaPixels) return;
+    try {
+      const croppedBlob = await getCroppedImg(croppingImageSrc, croppedAreaPixels);
+      if (!croppedBlob) throw new Error("Failed to crop image");
+
+      // Convert blob to base64 for upload
+      const reader = new FileReader();
+      reader.readAsDataURL(croppedBlob);
+      reader.onloadend = async () => {
+        const base64data = reader.result as string;
+
+        // Upload
+        const newUrl = await uploadBase64ToStorage(base64data, teacherId, `cropped_${Date.now()}`);
+
+        // Update content
+        // We need to replace the specific instance of the image URL in the markdown
+        // The URL might be used multiple times, but standard behavior is to update all or just this one.
+        // Since we don't have a unique ID for each image instance easily, replacing by URL is safest.
+        if (enhancedNote) {
+          // Replace the old URL with the new URL
+          // Escape special chars in old URL for regex
+          const oldUrlRegex = new RegExp(croppingImageSrc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+          const updatedNote = enhancedNote.replace(oldUrlRegex, newUrl);
+          setEnhancedNote(updatedNote);
+          if (originalEnhancedNote === enhancedNote) {
+            setOriginalEnhancedNote(updatedNote); // Keep synced if it was original
+          }
+        }
+
+        setCroppingImageSrc(null);
+      };
+    } catch (err) {
+      console.error("Crop failed", err);
+      alert("Failed to save cropped image");
     }
   };
 
@@ -1764,21 +2284,29 @@ const TeacherNotes: React.FC<{
       const correctionSummary = await extractCorrectionSummary(originalEnhancedNote, enhancedNote);
 
       // Save the correction to Firestore for future learning
-      await dbService.saveNoteCorrection(adminId, {
-        teacherId,
-        subjectId: selectedSubjectId,
-        classId: selectedClassId,
+      // Save the correction to Firestore for future learning
+      // For manual edits, we treat the prompt as "Manual Enhancement"
+      const correction: NoteCorrection = {
+        id: crypto.randomUUID(),
         originalContent: originalEnhancedNote,
         correctedContent: enhancedNote,
-        correctionSummary
-      });
+        correctionPrompt: "Manual Enhancement via Editor",
+        correctionSummary,
+        timestamp: Date.now(),
+        teacherId
+      };
+
+      await dbService.saveNoteCorrection(adminId, selectedSubjectId, selectedClassId, correction);
 
       // Save the corrected note as the latest version
       await dbService.saveGeneratedNote(adminId, {
         teacherId,
         subjectId: selectedSubjectId,
         classId: selectedClassId,
+        className: classNames[selectedClassId] || selectedClassId,
+        subjectName: subjectNames[selectedSubjectId] || selectedSubjectId,
         content: enhancedNote,
+        summary: summary || 'Updated note',
         moduleTitle: moduleTitle || suggestedModuleTitle || 'Updated Note',
         isLatest: true
       });
@@ -2240,7 +2768,7 @@ const TeacherNotes: React.FC<{
               </div>
             )}
 
-            <MarkdownRenderer content={enhancedNote} isDarkMode={isDarkMode} />
+            <MarkdownRenderer content={enhancedNote} isDarkMode={isDarkMode} onCrop={handleCropClick} />
           </div>
 
           {/* AI-Powered Correction Prompt */}
@@ -2270,13 +2798,41 @@ const TeacherNotes: React.FC<{
               💡 Be specific! Tell AI what to add, modify, or remove and where to place it.
             </p>
 
-            <button
-              onClick={handleApplyCorrection}
-              disabled={isApplyingCorrection || !correctionPrompt.trim()}
-              className="w-full px-6 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black shadow-lg shadow-blue-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
-            >
-              {isApplyingCorrection ? '⏳ Applying Correction...' : '✨ Apply Correction'}
-            </button>
+            {/* Correction Images Preview */}
+            <div className="flex gap-2 mb-4 overflow-x-auto">
+              {correctionImages.map((img, idx) => (
+                <div key={idx} className="relative group flex-shrink-0">
+                  <img src={img} alt={`Correction context ${idx}`} className="w-16 h-16 object-cover rounded-lg border border-slate-200 dark:border-slate-700" />
+                  <button
+                    onClick={() => setCorrectionImages(prev => prev.filter((_, i) => i !== idx))}
+                    className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Remove image"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-2 items-center">
+              <label className="cursor-pointer p-3 bg-slate-100 dark:bg-slate-700 text-slate-500 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={handleCorrectionImageUpload}
+                />
+                <ImageIcon size={20} />
+              </label>
+              <button
+                onClick={handleApplyCorrection}
+                disabled={isApplyingCorrection || (!correctionPrompt.trim() && correctionImages.length === 0)}
+                className="flex-1 px-6 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black shadow-lg shadow-blue-100 dark:shadow-none transition-all active:scale-95 disabled:opacity-50"
+              >
+                {isApplyingCorrection ? '⏳ Applying Correction...' : '✨ Apply Correction'}
+              </button>
+            </div>
           </div>
 
 
@@ -2379,6 +2935,15 @@ const TeacherNotes: React.FC<{
         </div>
       )}
       {/* Presentation Mode Overlay */}
+      {/* Image Crop Modal */}
+      {croppingImageSrc && (
+        <CropModal
+          imageSrc={croppingImageSrc}
+          onClose={() => setCroppingImageSrc(null)}
+          onCropComplete={handleCropComplete}
+        />
+      )}
+
       {isPresenting && enhancedNote && (
         <PresentationView
           content={enhancedNote}
@@ -2395,9 +2960,23 @@ const TeacherGradebook: React.FC<{
   submissions: Submission[];
   classNames: { [key: string]: string };
   subjectNames: { [key: string]: string };
-}> = ({ assignments, submissions, classNames, subjectNames }) => {
+  adminId: string;
+  onRefresh?: () => Promise<void>;
+  onSuccess?: (msg: string) => void;
+  onError?: (msg: string) => void;
+  onUpdateSubmission?: (sub: Submission) => void;
+}> = ({ assignments, submissions, classNames, subjectNames, adminId, onRefresh, onSuccess, onError, onUpdateSubmission }) => {
   const [expandedAssignments, setExpandedAssignments] = useState<{ [id: string]: boolean }>({});
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<string | null>(null);
+  const [editingSubmission, setEditingSubmission] = useState<Submission | null>(null); // New editing state
+
+  // Annotation Drawing State
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [drawStart, setDrawStart] = useState<{ x: number, y: number } | null>(null);
+  const [currentRect, setCurrentRect] = useState<{ x: number, y: number, w: number, h: number } | null>(null);
+  const [showAnnotationForm, setShowAnnotationForm] = useState(false);
+  const [annotationFormPos, setAnnotationFormPos] = useState<{ x: number, y: number } | null>(null);
+  const [tempBox, setTempBox] = useState<number[] | null>(null); // [ymin, xmin, ymax, xmax] 0-1000 scale
 
   const toggleAssignment = (assignmentId: string) => {
     setExpandedAssignments(prev => ({ ...prev, [assignmentId]: !prev[assignmentId] }));
@@ -2493,23 +3072,370 @@ const TeacherGradebook: React.FC<{
 
                       {selectedSubmission && (
                         <div className="space-y-6">
-                          <div className="bg-slate-50 dark:bg-slate-700/60 rounded-3xl p-6 border border-slate-100 dark:border-slate-700">
-                            <div className="flex flex-wrap items-center justify-between gap-4">
+                          <div className="lg:col-span-2 bg-slate-50 dark:bg-slate-900/50 rounded-3xl p-8 border border-slate-200 dark:border-slate-800">
+                            <div className="flex justify-between items-start mb-6">
                               <div>
-                                <h4 className="text-2xl font-black text-slate-800 dark:text-white">{selectedSubmission.studentName || selectedSubmission.studentId}</h4>
-                                <p className="text-xs font-bold uppercase tracking-widest text-slate-400">
-                                  {selectedSubmission.gradedAt ? `Graded ${new Date(selectedSubmission.gradedAt).toLocaleDateString()}` : 'Not graded yet'}
+                                <h3 className="text-2xl font-black text-slate-800 dark:text-white">{selectedSubmission.studentName}</h3>
+                                <p className="text-slate-500 font-bold text-xs uppercase tracking-widest mt-1">
+                                  {new Date(selectedSubmission.gradedAt || 0).toLocaleString()}
+                                  {assignment.dueDate && (
+                                    (() => {
+                                      const graded = selectedSubmission.gradedAt || 0;
+                                      const diff = assignment.dueDate - graded;
+                                      const absK = Math.abs(diff);
+                                      const days = Math.floor(absK / 86400000);
+                                      const hours = Math.floor((absK % 86400000) / 3600000);
+                                      const mins = Math.floor((absK % 3600000) / 60000);
+
+                                      let str = "";
+                                      if (days > 0) str += `${days}d `;
+                                      if (hours > 0) str += `${hours}h `;
+                                      str += `${mins}m `;
+
+                                      if (diff < 0) return <span className="ml-2 text-red-500 bg-red-100 dark:bg-red-900/40 px-2 py-0.5 rounded">{str} late</span>;
+                                      return <span className="ml-2 text-emerald-600 bg-emerald-100 dark:bg-emerald-900/40 px-2 py-0.5 rounded">{str} early</span>;
+                                    })()
+                                  )}
                                 </p>
                               </div>
-                              <div className="text-right">
+                              <div className="text-right flex flex-col items-end gap-2">
                                 <div className="text-3xl font-black text-indigo-600 dark:text-indigo-400">
-                                  {selectedSubmission.score ?? 0}/{selectedSubmission.maxScore ?? 0}
+                                  {editingSubmission && editingSubmission.id === selectedSubmission.id
+                                    ? editingSubmission.score
+                                    : selectedSubmission.score ?? 0}
+                                  /{selectedSubmission.maxScore ?? 0}
                                 </div>
+
+                                {/* Edit Controls */}
+                                {editingSubmission && editingSubmission.id === selectedSubmission.id ? (
+                                  <div className="flex gap-2 animate-in zoom-in">
+                                    <button
+                                      onClick={async () => {
+                                        if (!editingSubmission) return;
+
+                                        // Validation: Require duplicate Check or Manual Annotation
+                                        // "teacher must make an annotation to save edits"
+                                        const hasManualAnnotation = editingSubmission.annotations?.some(a => a.isManual);
+                                        if (!hasManualAnnotation) {
+                                          if (onError) onError("Please add an annotation (click on image) to verify your changes.");
+                                          else alert("Please add an annotation (click on image) to verify your changes.");
+                                          return;
+                                        }
+
+                                        // Save Logic
+                                        const prevEdited = selectedSubmission.editedCriteria || [];
+                                        const numCriteria = assignment.markingPoints.length;
+                                        // Ensure full length and no holes (Firestore rejects undefined/sparse)
+                                        const newEditedIndices = Array(numCriteria).fill(false).map((_, i) => prevEdited[i] ?? false);
+
+                                        // Mark newly changed criteria
+                                        if (editingSubmission.criteriaScores) {
+                                          assignment.markingPoints.forEach((_, idx) => {
+                                            const oldVal = selectedSubmission.criteriaScores?.[idx];
+                                            const newVal = editingSubmission.criteriaScores?.[idx];
+                                            if (oldVal !== newVal) {
+                                              newEditedIndices[idx] = true;
+                                            }
+                                          });
+                                        }
+
+                                        const finalSub = {
+                                          ...editingSubmission,
+                                          isEdited: true,
+                                          editedCriteria: newEditedIndices
+                                        };
+                                        try {
+                                          await dbService.saveSubmission(adminId, finalSub);
+
+                                          // Optimistic Update
+                                          if (onUpdateSubmission) {
+                                            onUpdateSubmission(finalSub);
+                                          }
+
+                                          // Show success immediately
+                                          if (onSuccess) onSuccess("Grade updated successfully!");
+
+                                          // Close edit mode
+                                          setEditingSubmission(null);
+
+                                          // Refresh in background
+                                          if (onRefresh) {
+                                            onRefresh().catch(console.error);
+                                          }
+                                        } catch (e: any) {
+                                          if (onError) onError("Failed to save grade: " + e.message);
+                                          else alert("Failed to save grade: " + e.message);
+                                          console.error(e);
+                                        }
+                                      }}
+                                      className="px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-xl font-bold text-xs shadow-lg shadow-green-200 dark:shadow-none"
+                                    >
+                                      Save Changes
+                                    </button>
+                                    <button
+                                      onClick={() => setEditingSubmission(null)}
+                                      className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-xl font-bold text-xs"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() => setEditingSubmission(selectedSubmission)}
+                                    className="px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-xl font-bold text-xs transition-colors"
+                                  >
+                                    Edit Grade ✏️
+                                  </button>
+                                )}
+
+                                {selectedSubmission.isEdited && !editingSubmission && (
+                                  <span className="bg-orange-100 text-orange-600 px-2 py-0.5 rounded text-[10px] font-black uppercase">Edited</span>
+                                )}
                                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Total Score</p>
                               </div>
                             </div>
-                            {selectedSubmission.feedback && (
-                              <p className="mt-4 text-sm text-slate-600 dark:text-slate-300">{selectedSubmission.feedback}</p>
+                            {selectedSubmission.studentAnswerImages && selectedSubmission.studentAnswerImages.length > 0 ? (
+                              <div className="mt-6">
+                                <h5 className="text-sm font-black uppercase tracking-widest text-slate-400 mb-3">Student Answer with AI Marks</h5>
+                                <div className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-black relative inline-block w-full">
+                                  <div
+                                    className="relative w-full h-auto group cursor-crosshair touch-none"
+                                    onMouseDown={(e) => {
+                                      if (!editingSubmission || editingSubmission.id !== selectedSubmission.id) return;
+                                      e.preventDefault();
+                                      const rect = e.currentTarget.getBoundingClientRect();
+                                      const x = e.clientX - rect.left;
+                                      const y = e.clientY - rect.top;
+                                      setIsDrawing(true);
+                                      setDrawStart({ x, y });
+                                      setCurrentRect({ x, y, w: 0, h: 0 });
+                                      setShowAnnotationForm(false);
+                                    }}
+                                    onMouseMove={(e) => {
+                                      if (!isDrawing || !drawStart) return;
+                                      e.preventDefault();
+                                      const rect = e.currentTarget.getBoundingClientRect();
+                                      const x = e.clientX - rect.left;
+                                      const y = e.clientY - rect.top;
+
+                                      const w = x - drawStart.x;
+                                      const h = y - drawStart.y;
+
+                                      setCurrentRect({
+                                        x: w > 0 ? drawStart.x : x,
+                                        y: h > 0 ? drawStart.y : y,
+                                        w: Math.abs(w),
+                                        h: Math.abs(h)
+                                      });
+                                    }}
+                                    onMouseUp={(e) => {
+                                      if (!isDrawing || !drawStart || !currentRect) return;
+                                      setIsDrawing(false);
+
+                                      // Min size check (to avoid accidental dots)
+                                      if (currentRect.w < 10 || currentRect.h < 10) {
+                                        setCurrentRect(null);
+                                        setDrawStart(null);
+                                        return;
+                                      }
+
+                                      const rect = e.currentTarget.getBoundingClientRect();
+
+                                      // Convert to 0-1000 scale [ymin, xmin, ymax, xmax]
+                                      const scaleX = 1000 / rect.width;
+                                      const scaleY = 1000 / rect.height;
+
+                                      // box_2d: [ymin, xmin, ymax, xmax]
+                                      const box = [
+                                        currentRect.y * scaleY,
+                                        currentRect.x * scaleX,
+                                        (currentRect.y + currentRect.h) * scaleY,
+                                        (currentRect.x + currentRect.w) * scaleX
+                                      ];
+
+                                      setTempBox(box);
+                                      setAnnotationFormPos({
+                                        x: currentRect.x + currentRect.w + 10,
+                                        y: currentRect.y
+                                      });
+                                      setShowAnnotationForm(true);
+                                    }}
+                                  >
+                                    <img
+                                      src={selectedSubmission.studentAnswerImages[0]}
+                                      alt="Student Answer"
+                                      className="w-full h-auto max-h-[600px] object-contain mx-auto"
+                                    />
+                                    {/* AI Annotations */}
+                                    {selectedSubmission.annotations?.map((ann, i) => (
+                                      <div
+                                        key={i}
+                                        className={`absolute border-2 rounded-lg flex items-center justify-center group pointer-events-none ${ann.isManual
+                                            ? 'border-indigo-500 bg-indigo-500/20'
+                                            : 'border-green-500 bg-green-500/20'
+                                          }`}
+                                        style={{
+                                          top: `${ann.box_2d[0] / 10}%`,
+                                          left: `${ann.box_2d[1] / 10}%`,
+                                          height: `${(ann.box_2d[2] - ann.box_2d[0]) / 10}%`,
+                                          width: `${(ann.box_2d[3] - ann.box_2d[1]) / 10}%`,
+                                        }}
+                                      >
+                                        {/* Hover Label */}
+                                        <div className="absolute -top-8 left-0 bg-black/80 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap z-20 transition-opacity pointer-events-none">
+                                          {ann.label}
+                                        </div>
+
+                                        {/* Score Badge */}
+                                        {ann.score !== undefined && (
+                                          <div className={`absolute -top-3 -right-3 w-6 h-6 text-white text-xs font-black rounded-full flex items-center justify-center shadow-lg border border-white z-10 ${ann.isManual ? 'bg-indigo-600' : 'bg-green-600'
+                                            }`}>
+                                            +{ann.score}
+                                          </div>
+
+                                        )}
+                                      </div>
+                                    ))}
+
+                                    {/* Current Drawing Rect */}
+                                    {currentRect && (
+                                      <div
+                                        className="absolute border-2 border-indigo-500 bg-indigo-500/20 z-20 pointer-events-none"
+                                        style={{
+                                          left: currentRect.x,
+                                          top: currentRect.y,
+                                          width: currentRect.w,
+                                          height: currentRect.h
+                                        }}
+                                      />
+                                    )}
+
+                                    {/* Annotation Input Popover */}
+                                    {showAnnotationForm && annotationFormPos && (
+                                      <div
+                                        className="absolute bg-white dark:bg-slate-800 p-4 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 z-[50] w-64 animate-in zoom-in-95 duration-200"
+                                        style={{
+                                          left: Math.min(annotationFormPos.x, 250),
+                                          top: annotationFormPos.y
+                                        }}
+                                        onMouseDown={(e) => e.stopPropagation()} // Prevent drag start
+                                      >
+                                        <h6 className="text-xs font-black uppercase text-slate-400 mb-2">Add Annotation</h6>
+                                        <div className="space-y-3">
+                                          <div>
+                                            <input
+                                              className="w-full bg-slate-100 dark:bg-slate-900 border-none rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-indigo-500"
+                                              placeholder="Label (e.g. Good Point)"
+                                              id="ann-label"
+                                            />
+                                          </div>
+                                          <div>
+                                            <input
+                                              type="number"
+                                              className="w-full bg-slate-100 dark:bg-slate-900 border-none rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-indigo-500"
+                                              placeholder="Score Change (e.g. +1, -0.5)"
+                                              step="0.5"
+                                              id="ann-score"
+                                            />
+                                          </div>
+                                          <div>
+                                            <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Affects Criteria</label>
+                                            <select className="w-full bg-slate-100 dark:bg-slate-900 border-none rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-indigo-500" id="ann-criterion">
+                                              <option value="">-- General / None --</option>
+                                              {assignment.markingPoints.map((m, i) => (
+                                                <option key={i} value={i}>{i + 1}. {m.point} (Max: {m.weight})</option>
+                                              ))}
+                                            </select>
+                                          </div>
+                                          <div className="flex gap-2 pt-1">
+                                            <button
+                                              className="flex-1 bg-green-500 hover:bg-green-600 text-white text-xs font-bold py-1.5 rounded-lg"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                const labelEl = document.getElementById('ann-label') as HTMLInputElement;
+                                                const scoreEl = document.getElementById('ann-score') as HTMLInputElement;
+                                                const critEl = document.getElementById('ann-criterion') as HTMLSelectElement;
+
+                                                const label = labelEl.value || "Teacher Note";
+                                                const score = parseFloat(scoreEl.value) || 0;
+                                                const criterionIdx = critEl.value ? parseInt(critEl.value) : undefined;
+
+                                                if (!editingSubmission || !tempBox) return;
+
+                                                setEditingSubmission(prev => {
+                                                  if (!prev) return null;
+
+                                                  const newAnn: Annotation = {
+                                                    label, score,
+                                                    box_2d: tempBox,
+                                                    isManual: true,
+                                                    criterionIndex: criterionIdx
+                                                  };
+
+                                                  const updatedAnnotations = [...(prev.annotations || []), newAnn];
+                                                  let updatedCriteriaScores = [...(prev.criteriaScores || [])];
+                                                  let updatedEditedCriteria = [...(editingSubmission?.editedCriteria || (selectedSubmission.editedCriteria || []))];
+
+                                                  if (!updatedEditedCriteria.length) updatedEditedCriteria = Array(assignment.markingPoints.length).fill(false);
+
+                                                  // Update Linked Criterion
+                                                  if (criterionIdx !== undefined && criterionIdx >= 0) {
+                                                    const currentCritScore = updatedCriteriaScores[criterionIdx] || 0;
+                                                    const maxCritScore = assignment.markingPoints[criterionIdx].weight;
+                                                    let newCritScore = currentCritScore + score;
+                                                    newCritScore = Math.max(0, Math.min(newCritScore, maxCritScore)); // Clamp
+
+                                                    updatedCriteriaScores[criterionIdx] = newCritScore;
+                                                    updatedEditedCriteria[criterionIdx] = true;
+                                                  }
+
+                                                  // Recalculate Total Score
+                                                  // Should be sum of ALL criteria + unlinked annotations
+                                                  const criteriaSum = updatedCriteriaScores.reduce((a, b) => a + (b || 0), 0);
+                                                  const unlinkedAnnotationSum = updatedAnnotations
+                                                    .filter(a => a.isManual && a.criterionIndex === undefined)
+                                                    .reduce((a, b) => a + (b.score || 0), 0);
+
+                                                  const cappedScore = Math.min(criteriaSum + unlinkedAnnotationSum, assignment.markingPoints.reduce((a, b) => a + b.weight, 0));
+
+                                                  return {
+                                                    ...prev,
+                                                    annotations: updatedAnnotations,
+                                                    criteriaScores: updatedCriteriaScores,
+                                                    editedCriteria: updatedEditedCriteria,
+                                                    score: cappedScore
+                                                  };
+                                                });
+
+                                                setShowAnnotationForm(false);
+                                                setCurrentRect(null);
+                                                setTempBox(null);
+                                              }}
+                                            >
+                                              Save
+                                            </button>
+                                            <button
+                                              className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold py-1.5 rounded-lg"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setShowAnnotationForm(false);
+                                                setCurrentRect(null);
+                                                setTempBox(null);
+                                              }}
+                                            >
+                                              Cancel
+                                            </button>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                  </div>
+                                </div>
+                              </div>
+
+                            ) : (
+                              <p className="mt-4 text-sm text-slate-400 italic">No image available for this submission.</p>
                             )}
                           </div>
 
@@ -2519,20 +3445,74 @@ const TeacherGradebook: React.FC<{
                               {assignment.markingPoints.map((criterion, idx) => {
                                 const met = selectedSubmission.criteriasMet?.[idx];
                                 const score = selectedSubmission.criteriaScores?.[idx];
-                                const color = met === true
-                                  ? 'border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300'
-                                  : met === false
-                                    ? 'border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300'
-                                    : 'border-slate-200 dark:border-slate-700 bg-white/60 dark:bg-slate-800 text-slate-600 dark:text-slate-300';
+
+                                const isEditing = editingSubmission && editingSubmission.id === selectedSubmission.id;
+                                const originalScore = selectedSubmission.criteriaScores?.[idx] ?? 0;
+                                const currentScore = isEditing ? (editingSubmission.criteriaScores?.[idx] ?? 0) : originalScore;
+
+                                const wasEdited = selectedSubmission.editedCriteria?.[idx];
+                                const isChangedLocal = isEditing && currentScore !== originalScore;
+                                const showHighlight = isChangedLocal || wasEdited;
+
+                                const color = showHighlight
+                                  ? 'border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 shadow-sm border-2'
+                                  : met === true
+                                    ? 'border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300'
+                                    : met === false
+                                      ? 'border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300'
+                                      : 'border-slate-200 dark:border-slate-700 bg-white/60 dark:bg-slate-800 text-slate-600 dark:text-slate-300';
 
                                 return (
-                                  <div key={idx} className={`p-4 rounded-2xl border ${color} flex items-center justify-between gap-4`}>
+                                  <div
+                                    key={idx}
+                                    className={`p-4 rounded-2xl border ${color} flex items-center justify-between gap-4 transition-all`}
+                                  >
                                     <div className="flex items-start gap-3">
-                                      <div className="w-7 h-7 rounded-lg bg-white/70 dark:bg-slate-800/80 text-xs font-black flex items-center justify-center">{idx + 1}</div>
-                                      <div className="text-sm font-semibold leading-snug">{criterion.point}</div>
+                                      <div className={`w-7 h-7 rounded-lg text-xs font-black flex items-center justify-center ${met ? 'bg-emerald-200 dark:bg-emerald-900 text-emerald-800' : 'bg-white/70 dark:bg-slate-800/80'}`}>
+                                        {met ? '✓' : idx + 1}
+                                      </div>
+                                      <div className="text-sm font-semibold leading-snug select-none">{criterion.point}</div>
                                     </div>
                                     <div className="text-sm font-black">
-                                      {score !== undefined ? score : '—'} / {criterion.weight}
+                                      {editingSubmission && editingSubmission.id === selectedSubmission.id ? (
+                                        <select
+                                          value={editingSubmission.criteriaScores?.[idx] ?? 0}
+                                          onClick={e => e.stopPropagation()} // Prevent parent click
+                                          onChange={e => {
+                                            const newVal = parseFloat(e.target.value);
+                                            setEditingSubmission(prev => {
+                                              if (!prev) return null;
+                                              const newMet = [...(prev.criteriasMet || [])];
+                                              newMet[idx] = newVal > 0; // True if any points given
+
+                                              const newScores = [...(prev.criteriaScores || [])];
+                                              newScores[idx] = newVal;
+
+                                              // Recalculate total score
+                                              const criteriaSum = newScores.reduce((a, b) => a + (b || 0), 0);
+                                              // Only add scores from MANUAL annotations to avoid double counting AI marks
+                                              const annotationSum = prev.annotations?.filter(a => a.isManual).reduce((a, b) => a + (b.score || 0), 0) || 0;
+                                              const cappedScore = Math.min(criteriaSum + annotationSum, prev.maxScore);
+
+                                              return {
+                                                ...prev,
+                                                criteriasMet: newMet,
+                                                criteriaScores: newScores,
+                                                score: cappedScore
+                                              };
+                                            });
+                                          }}
+                                          className="bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded px-1 py-0.5 text-xs font-bold focus:ring-2 focus:ring-indigo-500"
+                                        >
+                                          {Array.from({ length: (criterion.weight * 2) + 1 }, (_, i) => i * 0.5).map(val => (
+                                            <option key={val} value={val}>{val}</option>
+                                          ))}
+                                        </select>
+                                      ) : (
+                                        <span>{score !== undefined ? score : '—'}</span>
+                                      )}
+
+                                      <span className="opacity-50 ml-1">/ {criterion.weight}</span>
                                     </div>
                                   </div>
                                 );
@@ -2544,29 +3524,52 @@ const TeacherGradebook: React.FC<{
                     </div>
                   </div>
                 </div>
-              )}
+              )
+              }
             </div>
           );
         })}
       </div>
-    </div>
+    </div >
   );
 };
 
 export default TeacherDashboard;
 
-const AssignmentCard: React.FC<{ assignment: Assignment, onClick: () => void, isDraft?: boolean }> = ({ assignment, onClick, isDraft }) => (
+const AssignmentCard: React.FC<{ assignment: Assignment, onClick: () => void, isDraft?: boolean, onScan?: () => void }> = ({ assignment, onClick, isDraft, onScan }) => (
   <div
     onClick={onClick}
-    className={`group cursor-pointer bg-white dark:bg-slate-800 border ${isDraft ? 'border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/60' : 'border-slate-200 dark:border-slate-700'} rounded-3xl p-7 shadow-sm hover:shadow-xl hover:border-indigo-400 transition-all hover:-translate-y-1`}
+    className={`group cursor-pointer bg-white dark:bg-slate-800 border ${isDraft ? 'border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/60' : 'border-slate-200 dark:border-slate-700'} rounded-3xl p-7 shadow-sm hover:shadow-xl hover:border-indigo-400 transition-all hover:-translate-y-1 relative overflow-hidden`}
   >
-    <div className={`w-12 h-12 ${isDraft ? 'bg-slate-200 dark:bg-slate-700 text-slate-500' : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'} rounded-2xl flex items-center justify-center text-xl mb-4 group-hover:scale-110 transition-transform`}>
-      {isDraft ? '📝' : '📄'}
+    <div className="flex justify-between items-start mb-4">
+      <div className={`w-12 h-12 ${isDraft ? 'bg-slate-200 dark:bg-slate-700 text-slate-500' : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'} rounded-2xl flex items-center justify-center text-xl group-hover:scale-110 transition-transform`}>
+        {isDraft ? '📝' : '📄'}
+      </div>
+
+      {/* Scan Button */}
+      {!isDraft && onScan && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onScan(); }}
+          className="flex items-center gap-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 px-4 py-2 rounded-full font-bold text-xs transition-colors shadow-sm z-10"
+          title="Scan Submissions"
+        >
+          <Camera className="w-4 h-4" />
+          <span>SCAN SUBMISSIONS</span>
+        </button>
+      )}
     </div>
+
     <h3 className="text-xl font-bold mb-2 group-hover:text-indigo-600 transition-colors line-clamp-1">{assignment.title}</h3>
     <p className="text-slate-500 text-sm line-clamp-3 mb-6 leading-relaxed">{assignment.question}</p>
-    <div className="pt-6 border-t border-slate-100 dark:border-slate-700 flex items-center justify-between text-xs font-bold text-slate-400">
-      <span>{new Date(assignment.createdAt).toLocaleDateString()}</span>
+    <div className="pt-6 border-t border-slate-100 dark:border-slate-700 flex flex-col gap-2 text-xs font-bold text-slate-400">
+      <div className="flex justify-between items-center w-full">
+        <span>{new Date(assignment.createdAt).toLocaleDateString()}</span>
+        {assignment.dueDate && (
+          <span className={`px-2 py-1 rounded bg-slate-100 dark:bg-slate-700/50 ${Date.now() > assignment.dueDate ? 'text-red-500' : 'text-slate-500'}`}>
+            Due: {new Date(assignment.dueDate).toLocaleString()}
+          </span>
+        )}
+      </div>
       <span className={`px-3 py-1 rounded-full text-[10px] ${isDraft ? 'bg-slate-200 text-slate-600' : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600'}`}>
         {isDraft ? 'DRAFT' : 'View Details'}
       </span>

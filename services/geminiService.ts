@@ -23,16 +23,23 @@ export const analyzeAnswer = async (
   const prompt = `
     You are a professional academic grader with expertise in STEM.
     
-    Task: Grade the Student's Answer (which may consist of multiple files/images provided in order) against the Marking Criteria based on the Teacher's Reference (also potentially multiple files/images).
+    Task: Grade the Student's Answer (which may consist of multiple files/images provided in order) against the Marking Criteria based on the Teacher's Reference.
     
     Marking Criteria:
     ${markingCriteriaString}
 
     STRICT GRADING RULES:
-    1. SEQUENTIAL REVIEW: The files provided for both student and teacher are in logical order. Review them as a continuous piece of work.
-    2. EXPLICIT FORMULA REQUIREMENT: If a marking point asks for "Stating the formula", the student MUST write the symbolic formula explicitly.
-    3. SUBSTITUTION vs FORMULA: Correct numerical substitution DOES NOT satisfy a requirement to state the formula itself.
-    4. ACCURACY: Check signs (+/-) and units carefully.
+    1. SEQUENTIAL REVIEW: The files provided for both student and teacher are in logical order.
+    2. EXPLICIT FORMULA REQUIREMENT: If a marking point asks for "Stating the formula", the student MUST write it explicitly.
+    3. ACCURACY: Check signs (+/-) and units.
+    4. ANNOTATION: Identifying correct parts.
+       - For each marking point awarded, Identify the VISUAL REGION in the student's image that proves it.
+       - Return a bounding box [ymin, xmin, ymax, xmax] for that region (normalized 0-1000 scale).
+       - Label it with the marking point description or ID.
+       - ASSIGN POINTS: Indicate how many marks were awarded for this specific part (e.g. 1, 2, 0.5).
+       - If multiple pages, assume coordinates relative to the page containing the evidence (if possible, but currently we treat as one continuous stream, so do your best to localize).
+       - If evidence is missing, do not annotate.
+    
     5. JSON FORMAT: Output must be valid JSON matching the schema.
   `;
 
@@ -73,6 +80,21 @@ export const analyzeAnswer = async (
           criteriasMet: {
             type: Type.ARRAY,
             items: { type: Type.BOOLEAN }
+          },
+          annotations: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                label: { type: Type.STRING },
+                score: { type: Type.NUMBER },
+                box_2d: {
+                  type: Type.ARRAY,
+                  items: { type: Type.NUMBER }
+                }
+              },
+              required: ["label", "box_2d"]
+            }
           }
         },
         required: ["score", "totalPossible", "feedback", "criteriasMet"]
@@ -221,7 +243,7 @@ export const createEnhancedNote = async (
   teacherPrompt?: string,
   previousCorrections?: string,
   extractedText?: string,
-  pageImages?: Array<{ pageNumber: number; url: string }>
+  pageImages?: Array<{ pageNumber: number; url: string; imageData?: string }>
 ): Promise<string> => {
   const ai = getAI();
 
@@ -239,7 +261,7 @@ Subject: ${context.subjectName}
 Class: ${context.className}
 ${teacherPrompt ? `Teacher's Focus/Unit: ${teacherPrompt}` : ''}
 ${previousCorrections ? `Previous Teacher Feedback on Similar Notes:\n${previousCorrections}` : ''}
-${extractedText ? `\n\nExtracted Text Content:\n${extractedText.substring(0, 50000)}` : ''}
+${extractedText ? `\n\nExtracted Text Content:\n${extractedText.substring(0, 200000)}` : ''}
 ${pageImages ? `\n\nAvailable page images: ${pageImages.map(p => `Page ${p.pageNumber}`).join(', ')}` : ''}
 
 AVAILABLE TOOLS & PACKAGES:
@@ -371,69 +393,25 @@ CRITICAL INSTRUCTIONS FOR VISUAL ELEMENTS:
 3. CHARTS & GRAPHS - Create meaningful visual representations:
    Use Mermaid to show relationships, comparisons, hierarchies
    
-4. DO NOT request textbook images with [IMAGE:pageX] markers
-   Instead, CREATE diagrams using Mermaid when students need visual help
+4. EMBEDDED IMAGES (CRITICAL):
+   The user wants to see the actual diagrams/images from the source PDF.
    
-   Examples of when to create diagrams:
-   - Place value systems → Use Mermaid graph
-   - Problem-solving steps → Use flowchart
-   - Comparison processes → Use flowchart with decision nodes
-   - Proportions or parts → Use pie chart
-   - Concept relationships → Use class diagram or graph
+   - Look at the provided PDF pages.
+   - If a page contains a relevant diagram, chart, or illustration, YOU MUST EMBED IT.
+   - **AUTO-CROP**: Identify the specific region of the diagram.
+     - Return the bounding box coordinates in the format: \`ymin, xmin, ymax, xmax\` (scale 1-1000).
+   - Use the syntax: \`[IMAGE:Page X | ymin, xmin, ymax, xmax]\`
+     - Example: \`[IMAGE:Page 3 | 150, 200, 500, 800]\` (This crops to the specific diagram).
+     - If the WHOLE page is the diagram, use \`[IMAGE:Page X]\`.
+     
+   - Example Context:
+     "As shown in the diagram below:
+     [IMAGE:Page 3|150,100,450,900]
+     Figure: The structure of the cell."
    
-   Flowchart example:
-   \`\`\`mermaid
-   flowchart TD
-       A[Photosynthesis] --> B[Light Reaction]
-       A --> C[Calvin Cycle]
-       B --> D[ATP Production]
-       C --> D
-   \`\`\`
+   - Do NOT create a Mermaid diagram if the source image is complex and better suited for direct display.
    
-   Sequence example:
-   \`\`\`mermaid
-   sequenceDiagram
-       Student->>Teacher: Submit Work
-       Teacher->>AI: Grade Work
-       AI->>Teacher: Return Score
-       Teacher->>Student: Provide Feedback
-   \`\`\`
-   
-   Class diagram example:
-   \`\`\`mermaid
-   classDiagram
-       Animal <|-- Duck
-       Animal <|-- Fish
-       Animal : +int age
-       Animal : +String gender
-       Animal: +isMammal()
-   \`\`\`
-
-3. CHARTS & GRAPHS - Use Mermaid where possible:
-   
-   MANDATORY: 
-   - Ensure Mermaid code is "dense" (no empty lines between the code lines).
-   - IMPORTANT: If a label contains special characters like parentheses (), quotes "", or brackets [], you MUST wrap the label in double quotes.
-     Example: A["Right Angles (90°)"] instead of A[Right Angles (90°)]
-   
-   Pie chart:
-   \`\`\`mermaid
-   pie title Cell Composition
-   "Water" : 70
-   "Proteins" : 15
-   \`\`\`
-   
-   Bar chart (as graph):
-   \`\`\`mermaid
-   graph LR
-   B["Size (μm)"] --> C["Plant Cell (50)"]
-   \`\`\`
-
-4. EMBEDDED IMAGES:
-   We have extracted specific images/diagrams from the PDF.
-   
-   If you absolutely need to reference an image from the source, use:
-   [IMAGE:embedded_image] and add a caption.
+5. CLASS DIAGRAMS & FLOWCHARTS (Specific Request):
    
 5. CLASS DIAGRAMS & FLOWCHARTS (Specific Request):
    Use standard Mermaid \`classDiagram\` syntax. For hierarchies, use \`classDiagram\`. For processes, use \`flowchart TD\`.
@@ -488,13 +466,27 @@ Create a comprehensive, student-friendly study note with rich visual elements (e
     }
   }));
 
+  // Create explicit visual parts for each page if available
+  const visualPageParts = (pageImages || [])
+    .filter(p => p.imageData)
+    .flatMap(p => [
+      { text: `[VISUAL CONTEXT] Page ${p.pageNumber}:` },
+      {
+        inlineData: {
+          mimeType: "image/jpeg", // Assuming canvas toDataURL uses jpeg/png
+          data: p.imageData!.split(',')[1]
+        }
+      }
+    ]);
+
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
     contents: {
       role: 'user',
       parts: [
         { text: prompt },
-        ...noteParts
+        ...noteParts, // Keep original PDF just in case
+        ...visualPageParts // Explicitly add page snapshots
       ] as any[]
     } as any
   });
@@ -540,9 +532,68 @@ Be specific about what was changed and why it matters for future note generation
   return response.text || 'Teacher made corrections to improve clarity and accuracy.';
 };
 
+export const identifyStudentName = async (
+  imageBase64: string,
+  studentNames: string[]
+): Promise<{ studentName: string | null; confidence: string }> => {
+  const ai = getAI();
+
+  const prompt = `
+    You are an intelligent assistant helping a teacher sort assignment papers.
+    
+    Task: Identify the student name written on this paper.
+    
+    Context:
+    This paper belongs to one of the following students in the class:
+    ${JSON.stringify(studentNames)}
+    
+    Instructions:
+    1. Look at the handwritten name on the paper (usually at the top).
+    2. Match it to the closest name in the provided list.
+    3. If the name is clearly visible and matches a student (even with slight spelling diffs or "First Last" vs "First L."), return the exact name from the list.
+    4. If the name is ambiguous or not in the list, return "null".
+    
+    Output Format:
+    Return JSON ONLY:
+    { "studentName": "Exact Name From List" | null, "confidence": "High" | "Medium" | "Low" }
+  `;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: {
+      role: 'user',
+      parts: [
+        { text: prompt },
+        {
+          inlineData: {
+            mimeType: getMimeType(imageBase64),
+            data: imageBase64.split(',')[1]
+          }
+        }
+      ]
+    },
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          studentName: { type: Type.STRING, nullable: true },
+          confidence: { type: Type.STRING }
+        },
+        required: ["studentName", "confidence"]
+      }
+    }
+  });
+
+  const text = response.text || "{}";
+  return JSON.parse(text);
+};
+
 export const applyNoteCorrection = async (
   currentNoteContent: string,
-  correctionPrompt: string
+  correctionPrompt: string,
+  correctionImages?: string[], // Base64 images
+  correctionImageUrls?: string[] // Public URLs
 ): Promise<string> => {
   const ai = getAI();
 
@@ -555,41 +606,26 @@ ${currentNoteContent}
 Teacher's Correction Request:
 ${correctionPrompt}
 
+${correctionImageUrls && correctionImageUrls.length > 0 ? `
+ATTACHED IMAGES:
+The teacher has uploaded images to be used in this correction.
+${correctionImageUrls.map((url, i) => `Image ${i + 1}: ${url}`).join('\n')}
+
+CRITICAL INSTRUCTION FOR IMAGES:
+- The teacher wants these exact images inserted.
+- You MUST use the provided URLs directly.
+- To insert Image 1, write EXACTLY: ![Figure](${correctionImageUrls[0]})
+- Do NOT use placeholders like [Image] or [Figure].
+- Do NOT omit the image.
+` : ''}
   Task: Carefully read the teacher's correction request and modify the note accordingly.
+  
+  IF IMAGES ARE PROVIDED:
+  - The teacher has attached images to this request.
+  - Use them to update the content (e.g., descriptions, creating Mermaid diagrams from them, or answering questions based on them).
 
 VISUAL ELEMENT INSTRUCTIONS(Use these when adding new content):
-
-  1. FORMULAS & EQUATIONS - Use LaTeX syntax:
-   Display math: $$x = \\frac{ -b \\pm \\sqrt{ b ^ 2 - 4ac } } { 2a } $$
-   Inline math: $E = mc ^ 2$
-
-  2. DIAGRAMS - Use Mermaid syntax:
-
-  Flowchart:
-\`\`\`mermaid
-   flowchart TD
-       A[Start] --> B[Process]
-       B --> C[End]
-   \`\`\`
-   
-   Sequence:
-   \`\`\`mermaid
-   sequenceDiagram
-       A->>B: Message
-       B->>C: Response
-   \`\`\`
-   
-   Pie chart:
-   \`\`\`mermaid
-   pie title Data
-       "Category A" : 40
-       "Category B" : 60
-   \`\`\`
-
-3. TABLES - Use markdown table syntax:
-   | Header 1 | Header 2 |
-   | -------- | -------- |
-   | Data 1   | Data 2   |
+${currentNoteContent.substring(0, 100000)} // Truncate if too large, but usually fine
 
 Rules:
 1. Preserve all existing content unless explicitly asked to modify it
@@ -604,13 +640,22 @@ Rules:
 Modified Note:
 `;
 
+  const imageParts = (correctionImages || []).map(img => ({
+    inlineData: {
+      mimeType: getMimeType(img),
+      data: img.split(',')[1]
+    }
+  }));
+
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
     contents: {
+      role: 'user',
       parts: [
-        { text: prompt }
-      ]
-    }
+        { text: prompt },
+        ...imageParts
+      ] as any[]
+    } as any
   });
 
   return response.text || currentNoteContent;

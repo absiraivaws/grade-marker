@@ -75,7 +75,18 @@ export interface Assignment {
   teacherAnswerImagesBase64?: string[]; // Base64 for Gemini
   markingPoints: MarkingCriterion[];
   createdAt: number;
+  dueDate?: number; // New: Deadline
+  allowLateSubmissions?: boolean; // New: If flase, block after due date
+  treatLateAsNormal?: boolean; // New: If true, ignore due date (re-enabled mode)
   status: 'DRAFT' | 'PUBLISHED';
+}
+
+export interface Annotation {
+  label: string;
+  score?: number; // Added score field
+  box_2d: number[]; // [ymin, xmin, ymax, xmax] in 0-1000 scale
+  isManual?: boolean; // New: To distinguish from AI annotations
+  criterionIndex?: number; // New: Link to specific marking point
 }
 
 export interface Submission {
@@ -90,7 +101,11 @@ export interface Submission {
   maxScore: number;
   criteriaScores?: number[];
   criteriasMet?: boolean[];
+  annotations?: Annotation[];
   gradedAt?: number;
+  isLate?: boolean; // New: Submitted after due date
+  isEdited?: boolean; // New: Manually edited by teacher
+  editedCriteria?: boolean[]; // New: Track which specific criteria were modified
 }
 
 export interface AIResponse {
@@ -98,6 +113,7 @@ export interface AIResponse {
   totalPossible: number;
   feedback: string;
   criteriasMet: boolean[];
+  annotations?: Annotation[];
 }
 
 export interface GeneratedNote {
@@ -105,21 +121,25 @@ export interface GeneratedNote {
   teacherId: string;
   subjectId: string;
   classId: string;
+  className?: string;
+  subjectName?: string;
   content: string;
-  moduleTitle: string; // Module name/number (e.g., "Module 1: Introduction to Physics")
+  summary: string;
   createdAt: number;
-  updatedAt: number;
+  updatedAt?: number;
+  moduleTitle?: string;
+  originalContent?: string;
   isLatest: boolean;
-  groupId?: string; // ID of the first note in this series (for versioning)
+  groupId?: string;
 }
 
 export interface NoteCorrection {
   id: string;
-  teacherId: string;
-  subjectId: string;
-  classId: string;
   originalContent: string;
   correctedContent: string;
-  correctionSummary: string; // AI-generated summary of what was corrected
-  createdAt: number;
+  correctionPrompt: string;
+  correctionSummary: string;
+  timestamp: number;
+  teacherId: string;
+  createdAt?: number; // DB timestamp
 }
