@@ -156,6 +156,7 @@ export interface Textbook {
   uploadedAt: number;
   status: 'PROCESSING' | 'READY' | 'ERROR';
   pageCount?: number;
+  totalActivities?: number;
 }
 
 export interface LearningActivity {
@@ -174,6 +175,7 @@ export interface LearningActivity {
 export interface ActivitySubmission {
   id: string;
   activityId: string;
+  textbookId?: string; // For easier progress tracking
   studentId: string;
   answerImageUrls: string[];
   score?: number;

@@ -477,66 +477,75 @@ export const dbService = {
 
   // Textbooks
   async saveTextbook(adminId: string, textbook: Textbook) {
-    const docRef = doc(getNestedColl(adminId, 'textbooks'), textbook.id);
+    // New Path: users/{adminId}/students/{studentId}/textbooks/{textbookId}
+    const docRef = doc(db, 'users', adminId, 'students', textbook.studentId, 'textbooks', textbook.id);
     await setDoc(docRef, textbook);
   },
 
   async getTextbooks(adminId: string, studentId: string): Promise<Textbook[]> {
-    const q = query(
-      getNestedColl(adminId, 'textbooks'),
-      where('studentId', '==', studentId)
-    );
+    // New Path: users/{adminId}/students/{studentId}/textbooks
+    const textbooksRef = collection(db, 'users', adminId, 'students', studentId, 'textbooks');
+    const q = query(textbooksRef); // No need for 'where studentId' as it's implied by path
+
     const snap = await getDocs(q);
     return snap.docs
       .map(d => d.data() as Textbook)
       .sort((a, b) => b.uploadedAt - a.uploadedAt);
   },
 
-  async deleteTextbook(adminId: string, textbookId: string) {
-    await deleteDoc(doc(getNestedColl(adminId, 'textbooks'), textbookId));
-
-    // Also cleanup learning activities (optional but good practice)
-    const q = query(getNestedColl(adminId, 'learningActivities'), where('textbookId', '==', textbookId));
-    const snap = await getDocs(q);
-    const batch = (await import('firebase/firestore')).writeBatch(db);
-    snap.docs.forEach(d => batch.delete(d.ref));
-    await batch.commit();
+  async deleteTextbook(adminId: string, studentId: string, textbookId: string) {
+    await deleteDoc(doc(db, 'users', adminId, 'students', studentId, 'textbooks', textbookId));
   },
 
-  // Activities
-  async saveExtractedActivities(adminId: string, activities: LearningActivity[]) {
-    // Uses batch write for efficiency
-    const { writeBatch, doc } = await import('firebase/firestore');
+  // Activities (Subcollection of Textbook)
+  // Required: adminId, studentId (to find path), textbookId
+  async saveExtractedActivities(adminId: string, studentId: string, activities: LearningActivity[]) {
+    const { writeBatch, doc, collection } = await import('firebase/firestore');
     const batch = writeBatch(db);
 
     activities.forEach(activity => {
-      const docRef = doc(getNestedColl(adminId, 'learningActivities'), activity.id);
+      // New Path: users/{adminId}/students/{studentId}/textbooks/{textbookId}/activities/{activityId}
+      const textbookId = activity.textbookId;
+      const activitiesRef = collection(db, 'users', adminId, 'students', studentId, 'textbooks', textbookId, 'activities');
+      const docRef = doc(activitiesRef, activity.id);
       batch.set(docRef, activity);
     });
 
     await batch.commit();
   },
 
-  async getActivitiesForTextbook(adminId: string, textbookId: string): Promise<LearningActivity[]> {
-    const q = query(
-      getNestedColl(adminId, 'learningActivities'),
-      where('textbookId', '==', textbookId)
-    );
-    const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as LearningActivity);
+  async getActivitiesForTextbook(adminId: string, studentId: string, textbookId: string): Promise<LearningActivity[]> {
+    const { collection } = await import('firebase/firestore');
+    // New Path: users/{adminId}/students/{studentId}/textbooks/{textbookId}/activities
+    const activitiesRef = collection(db, 'users', adminId, 'students', studentId, 'textbooks', textbookId, 'activities');
+    const q = await getDocs(activitiesRef);
+    return q.docs.map(d => d.data() as LearningActivity);
   },
 
   // Activity Submissions
+  // Path: users/{adminId}/students/{studentId}/textbooks/{textbookId}/submissions/{submissionId}
   async saveActivitySubmission(adminId: string, submission: ActivitySubmission) {
-    const docRef = doc(getNestedColl(adminId, 'activitySubmissions'), submission.id);
+    if (!submission.textbookId) {
+      console.error("Cannot save submission without textbookId in new structure");
+      throw new Error("Textbook ID required for submission");
+    }
+
+    const { collection } = await import('firebase/firestore');
+    const submissionsRef = collection(db, 'users', adminId, 'students', submission.studentId, 'textbooks', submission.textbookId, 'submissions');
+    const docRef = doc(submissionsRef, submission.id);
+
     await setDoc(docRef, submission);
   },
 
   async getActivitySubmissions(adminId: string, studentId: string): Promise<ActivitySubmission[]> {
+    // Collection Group Query remains effective here as we still want "all submissions for this student"
+    // regardless of which textbook they are buried in.
+    const { collectionGroup } = await import('firebase/firestore');
     const q = query(
-      getNestedColl(adminId, 'activitySubmissions'),
+      collectionGroup(db, 'submissions'),
       where('studentId', '==', studentId)
     );
+
     const snap = await getDocs(q);
     return snap.docs
       .map(d => d.data() as ActivitySubmission)

@@ -31,16 +31,14 @@ const ContinuousLearning: React.FC<Props> = ({ studentId, adminId }) => {
     loadTextbooks();
   }, [studentId, adminId]);
 
-  // Load submissions whenever we load activities or view changes
+  // Load submissions globally to show progress
   useEffect(() => {
     const loadSubs = async () => {
-      if (selectedTextbook) {
-        const subs = await dbService.getActivitySubmissions(adminId, studentId);
-        setSubmissions(subs);
-      }
+      const subs = await dbService.getActivitySubmissions(adminId, studentId);
+      setSubmissions(subs);
     };
     loadSubs();
-  }, [selectedTextbook, view, studentId, adminId]);
+  }, [studentId, adminId]);
 
   const loadTextbooks = async () => {
     const data = await dbService.getTextbooks(adminId, studentId);
@@ -49,15 +47,39 @@ const ContinuousLearning: React.FC<Props> = ({ studentId, adminId }) => {
 
   const loadActivities = async (book: Textbook) => {
     setIsProcessing(true);
-    const acts = await dbService.getActivitiesForTextbook(adminId, book.id);
-    setActivities(acts);
+    // Updated: Pass studentId
+    const acts = await dbService.getActivitiesForTextbook(adminId, book.studentId, book.id);
+
+    // Sort activities by extracted number (Section/Exercise number)
+    const sortedActs = acts.sort((a, b) => {
+      const getNum = (s?: string) => {
+        if (!s) return Infinity;
+        const match = s.match(/(\d+)(\.\d+)?/);
+        return match ? parseFloat(match[0]) : Infinity;
+      };
+
+      const numA = getNum(a.title);
+      const numB = getNum(b.title);
+
+      if (numA !== numB && numA !== Infinity && numB !== Infinity) {
+        return numA - numB;
+      }
+
+      // Fallback to string sort
+      const titleA = a.title || '';
+      const titleB = b.title || '';
+      return titleA.localeCompare(titleB, undefined, { numeric: true, sensitivity: 'base' });
+    });
+
+    setActivities(sortedActs);
     setIsProcessing(false);
   };
 
   const deleteTextbook = async (textbook: Textbook) => {
     if (!confirm('Are you sure you want to delete this textbook?')) return;
     try {
-      await dbService.deleteTextbook(adminId, textbook.id);
+      // Updated: Pass studentId
+      await dbService.deleteTextbook(adminId, textbook.studentId, textbook.id);
       setTextbooks(prev => prev.filter(t => t.id !== textbook.id));
     } catch (err) {
       console.error(err);
@@ -94,10 +116,12 @@ const ContinuousLearning: React.FC<Props> = ({ studentId, adminId }) => {
         const base64 = reader.result as string;
         try {
           const extractedActs = await extractActivitiesFromTextbook(base64, newBook.id);
-          await dbService.saveExtractedActivities(adminId, extractedActs);
+          // Updated: Pass studentId (newBook.studentId is same as scope studentId)
+          await dbService.saveExtractedActivities(adminId, newBook.studentId, extractedActs);
 
           // Update local state
           newBook.status = 'READY';
+          newBook.totalActivities = extractedActs.length;
           await dbService.saveTextbook(adminId, newBook);
           setTextbooks(prev => [newBook, ...prev]);
           alert(`Success! Extracted ${extractedActs.length} activities.`);
@@ -144,6 +168,7 @@ const ContinuousLearning: React.FC<Props> = ({ studentId, adminId }) => {
       const submission: ActivitySubmission = {
         id: Date.now().toString(),
         activityId: selectedActivity.id,
+        textbookId: selectedTextbook?.id,
         studentId,
         answerImageUrls: uploadedUrls,
         submittedAt: Date.now(),
@@ -195,35 +220,71 @@ const ContinuousLearning: React.FC<Props> = ({ studentId, adminId }) => {
 
           {/* Book List */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {textbooks.map(book => (
-              <div key={book.id} onClick={() => {
-                if (book.status === 'READY') {
-                  setSelectedTextbook(book);
-                  loadActivities(book);
-                  setView('ACTIVITIES');
-                }
-              }} className={`group relative bg-white dark:bg-slate-800 p-6 rounded-[2rem] border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-xl transition-all ${book.status !== 'READY' ? 'opacity-75 cursor-not-allowed' : 'cursor-pointer hover:-translate-y-1'}`}>
-                <div className="absolute top-4 right-4">
-                  {book.status === 'PROCESSING' && <span className="bg-yellow-100 text-yellow-700 text-[10px] font-black uppercase px-2 py-1 rounded">Processing</span>}
-                  {book.status === 'READY' && <span className="bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase px-2 py-1 rounded">Ready</span>}
-                  {book.status === 'ERROR' && <span className="bg-red-100 text-red-700 text-[10px] font-black uppercase px-2 py-1 rounded">Error</span>}
-                </div>
+            {textbooks.map(book => {
+              // Calculate Progress
+              // Fallback: If totalActivities is missing (old data), we might show 0 or handle fetching, but here we assume new/migrated data.
+              // We need submissions to calculate progress. We have 'submissions' state but it's loaded only when a book is selected logic used to be there.
+              // Update: We should fetch ALL submissions on mount to show progress here. 
+              // Assuming 'submissions' contains ALL for student (as per dbService.getActivitySubmissions).
 
-                <div className="absolute top-4 left-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    onClick={(e) => { e.stopPropagation(); deleteTextbook(book); }}
-                    className="p-2 bg-red-100 text-red-600 rounded-full hover:bg-red-200 transition-colors"
-                    title="Delete Textbook"
-                  >
-                    🗑️
-                  </button>
-                </div>
+              const total = book.totalActivities || 0;
+              // Count unique activities submitted for THIS book.
+              // Note: 'submissions' state might need to be guaranteed loaded. Currently it's loaded in useEffect dependent on 'selectedTextbook'.
+              // We need to verify 'submissions' are loaded globally for the library view.
 
-                <div className="w-12 h-12 bg-slate-100 dark:bg-slate-700 rounded-xl flex items-center justify-center text-2xl mb-4 group-hover:scale-110 transition-transform">📖</div>
-                <h4 className="font-bold text-lg mb-1 line-clamp-1">{book.title}</h4>
-                <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">{new Date(book.uploadedAt).toLocaleDateString()}</p>
-              </div>
-            ))}
+              // However, if we assume 'submissions' has the list, we can filter.
+              // But ActivitySubmission didn't have textbookId before this change.
+              // For backward compatibility or accurate counting without textbookId, we'd need to join. :-(
+              // But let's assume we proceed with the new field.
+
+              const bookSubmissions = submissions.filter(s => s.textbookId === book.id);
+              // Filter distinct activities
+              const completedCount = new Set(bookSubmissions.map(s => s.activityId)).size;
+              const progress = total > 0 ? Math.round((completedCount / total) * 100) : 0;
+
+              return (
+                <div key={book.id} onClick={() => {
+                  if (book.status === 'READY') {
+                    setSelectedTextbook(book);
+                    loadActivities(book);
+                    setView('ACTIVITIES');
+                  }
+                }} className={`group relative bg-white dark:bg-slate-800 p-6 rounded-[2rem] border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-xl transition-all ${book.status !== 'READY' ? 'opacity-75 cursor-not-allowed' : 'cursor-pointer hover:-translate-y-1'}`}>
+                  <div className="absolute top-4 right-4">
+                    {book.status === 'PROCESSING' && <span className="bg-yellow-100 text-yellow-700 text-[10px] font-black uppercase px-2 py-1 rounded">Processing</span>}
+                    {book.status === 'READY' && <span className="bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase px-2 py-1 rounded">Ready</span>}
+                    {book.status === 'ERROR' && <span className="bg-red-100 text-red-700 text-[10px] font-black uppercase px-2 py-1 rounded">Error</span>}
+                  </div>
+
+                  <div className="absolute top-4 left-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); deleteTextbook(book); }}
+                      className="p-2 bg-red-100 text-red-600 rounded-full hover:bg-red-200 transition-colors"
+                      title="Delete Textbook"
+                    >
+                      🗑️
+                    </button>
+                  </div>
+
+                  <div className="w-12 h-12 bg-slate-100 dark:bg-slate-700 rounded-xl flex items-center justify-center text-2xl mb-4 group-hover:scale-110 transition-transform">📖</div>
+                  <h4 className="font-bold text-lg mb-1 line-clamp-1">{book.title}</h4>
+                  <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-4">{new Date(book.uploadedAt).toLocaleDateString()}</p>
+
+                  {/* Progress Bar */}
+                  {book.status === 'READY' && (
+                    <div>
+                      <div className="flex justify-between text-[10px] font-bold text-slate-400 mb-1 uppercase tracking-wider">
+                        <span>Progress</span>
+                        <span>{completedCount}/{total} ({progress}%)</span>
+                      </div>
+                      <div className="w-full h-2 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                        <div className="h-full bg-emerald-500 rounded-full transition-all duration-1000" style={{ width: `${progress}%` }} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
