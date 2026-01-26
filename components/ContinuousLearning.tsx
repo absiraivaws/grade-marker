@@ -18,6 +18,7 @@ const ContinuousLearning: React.FC<Props> = ({ studentId, adminId }) => {
   const [selectedActivity, setSelectedActivity] = useState<LearningActivity | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [showTextbookScanner, setShowTextbookScanner] = useState(false);
 
   // Solve Mode State
   const [showWebcam, setShowWebcam] = useState(false);
@@ -34,8 +35,15 @@ const ContinuousLearning: React.FC<Props> = ({ studentId, adminId }) => {
   // Load submissions globally to show progress
   useEffect(() => {
     const loadSubs = async () => {
-      const subs = await dbService.getActivitySubmissions(adminId, studentId);
-      setSubmissions(subs);
+      try {
+        const subs = await dbService.getActivitySubmissions(adminId, studentId);
+        setSubmissions(subs);
+      } catch (err: any) {
+        console.error("Failed to load submissions", err);
+        if (err.message && err.message.includes('index')) {
+          alert("Admin Action Required: The 'submissions' query requires a Firestore Index. Please check the browser console for the creation link.");
+        }
+      }
     };
     loadSubs();
   }, [studentId, adminId]);
@@ -142,9 +150,56 @@ const ContinuousLearning: React.FC<Props> = ({ studentId, adminId }) => {
     }
   };
 
+  const handleTextbookCapture = async (imgSrc: string) => {
+    // Keep scanner open for multiple pages
+    // setShowTextbookScanner(false); 
+    setIsUploading(true);
+    try {
+      // 1. Upload Image
+      const res = await fetch(imgSrc);
+      const blob = await res.blob();
+      const file = new File([blob], `scanned_textbook_${Date.now()}.jpg`, { type: 'image/jpeg' });
+
+      const path = `textbooks/${studentId}/${Date.now()}_scanned.jpg`;
+      const url = await dbService.uploadImage(file, path);
+
+      // 2. Create Textbook Record
+      const newBook: Textbook = {
+        id: Date.now().toString(),
+        studentId,
+        title: `Scanned Page ${new Date().toLocaleTimeString()}`,
+        subjectId: 'generic',
+        fileUrl: url,
+        uploadedAt: Date.now(),
+        status: 'PROCESSING'
+      };
+      await dbService.saveTextbook(adminId, newBook);
+
+      // 3. Trigger Extraction
+      // imgSrc is already base64
+      const extractedActs = await extractActivitiesFromTextbook(imgSrc, newBook.id);
+      await dbService.saveExtractedActivities(adminId, newBook.studentId, extractedActs);
+
+      // Update local state
+      newBook.status = 'READY';
+      newBook.totalActivities = extractedActs.length;
+      await dbService.saveTextbook(adminId, newBook);
+      setTextbooks(prev => [newBook, ...prev]);
+      alert(`Success! Extracted ${extractedActs.length} activities.`);
+
+    } catch (err) {
+      console.error("Scanning failed", err);
+      // Create error backend record if needed, or just alert
+      alert("Failed to process scanned page: " + (err as Error).message);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const handleCapture = (imgSrc: string) => {
     setAnswerImages(prev => [...prev, imgSrc]);
-    setShowWebcam(false);
+    // Keep scanner open
+    // setShowWebcam(false);
   };
 
   const submitAnswer = async () => {
@@ -211,11 +266,22 @@ const ContinuousLearning: React.FC<Props> = ({ studentId, adminId }) => {
             <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-900 rounded-full flex items-center justify-center text-3xl mx-auto mb-4 text-indigo-600">📚</div>
             <h3 className="text-xl font-bold mb-2 text-indigo-900 dark:text-indigo-200">Upload a Textbook</h3>
             <p className="text-slate-500 mb-6 max-w-md mx-auto">Upload a PDF chapter or worksheet. AI will automatically extract exercises for you to practice.</p>
-            <label className={`inline-flex items-center gap-2 px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold cursor-pointer transition-transform active:scale-95 ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}>
-              {isUploading ? <div className="animate-spin w-5 h-5 border-2 border-white/30 border-t-white rounded-full" /> : <span>📤</span>}
-              <span>{isUploading ? 'Processing PDF...' : 'Select PDF File'}</span>
-              <input type="file" accept="application/pdf" className="hidden" onChange={handleTextbookUpload} />
-            </label>
+            <div className="flex gap-4 justify-center">
+              <label className={`inline-flex items-center gap-2 px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold cursor-pointer transition-transform active:scale-95 ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                {isUploading ? <div className="animate-spin w-5 h-5 border-2 border-white/30 border-t-white rounded-full" /> : <span>📤</span>}
+                <span>{isUploading ? 'Processing File...' : 'Upload PDF'}</span>
+                <input type="file" accept="application/pdf" className="hidden" onChange={handleTextbookUpload} />
+              </label>
+
+              <button
+                onClick={() => setShowTextbookScanner(true)}
+                disabled={isUploading}
+                className="inline-flex items-center gap-2 px-8 py-3 bg-white dark:bg-slate-800 text-indigo-600 border-2 border-indigo-200 dark:border-indigo-900 hover:border-indigo-500 rounded-xl font-bold cursor-pointer transition-colors active:scale-95 disabled:opacity-50"
+              >
+                <span>📸</span>
+                <span>Scan Page</span>
+              </button>
+            </div>
           </div>
 
           {/* Book List */}
@@ -483,13 +549,24 @@ const ContinuousLearning: React.FC<Props> = ({ studentId, adminId }) => {
         </div>
       )}
 
-      {/* WEBCAM MODAL */}
+      {/* WEBCAM MODAL (ANSWER) */}
       {showWebcam && (
         <div className="fixed inset-0 z-[100] bg-black">
           <WebcamScanner
             isActive={true}
             onCapture={handleCapture}
             onClose={() => setShowWebcam(false)}
+          />
+        </div>
+      )}
+
+      {/* WEBCAM MODAL (TEXTBOOK) */}
+      {showTextbookScanner && (
+        <div className="fixed inset-0 z-[100] bg-black">
+          <WebcamScanner
+            isActive={true}
+            onCapture={handleTextbookCapture}
+            onClose={() => setShowTextbookScanner(false)}
           />
         </div>
       )}

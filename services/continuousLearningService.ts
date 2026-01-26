@@ -19,17 +19,20 @@ export const extractActivitiesFromTextbook = async (
 
   const prompt = `
     You are an expert educational content extractor.
-    Analyze the provided textbook (PDF).
+    Analyze the provided textbook content (PDF or Image).
 
     CRITICAL INSTRUCTION: GROUPING
     - Look for "Exercise" headings (e.g., "Exercise 1.1", "Exercise 3.4", "Questions").
     - Treat EACH "Exercise" or "Question Set" block as a SINGLE Learning Activity.
-    - The 'title' MUST be the Heading (e.g., "Exercise 1.1").
+    - The 'title' field is CRITICAL. It MUST follow the format "Exercise X.Y", "Activity X.Y", or "X.Y.Z".
+    - DO NOT use long descriptive titles (e.g., "Exercise 1.1: Calculating Velocity"). 
+    - ONLY use the numbering (e.g., "Exercise 1.1").
+    - If no explicit number is present, use "Exercise 1", "Exercise 2", etc., based on order.
     - The 'question' field must contain ALL the individual questions/problems listed under that exercise.
     - Do NOT split questions into separate items if they belong to the same Exercise header.
     
     For each identified item (Exercise group), extract:
-    - A short title (e.g., "Exercise 1.1").
+    - A SHORT title (e.g., "Exercise 1.1").
     - The full text of all questions in that group.
     - The chapter context.
     - The topic.
@@ -80,18 +83,27 @@ export const extractActivitiesFromTextbook = async (
   const rawActivities = JSON.parse(text);
 
   // Map to LearningActivity interface
-  return rawActivities.map((a: any) => ({
-    id: `act_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-    textbookId,
-    title: a.title || 'Untitled Activity',
-    question: a.question,
-    chapter: a.chapter || null,
-    topic: a.topic || null,
-    type: a.type as 'QA' | 'MCQ' | 'PRACTICE',
-    difficulty: a.difficulty || 'medium', // Default to medium if unknown
-    pageNumber: a.pageNumber || null,
-    status: 'PENDING'
-  }));
+  // Map to LearningActivity interface
+  return rawActivities.map((a: any) => {
+    const cleanTitle = (t: string) => {
+      // Remove any description after a colon or " - "
+      // e.g. "Exercise 1.1: Intro" -> "Exercise 1.1"
+      return t.split(/[:\–\—]/)[0].trim();
+    };
+
+    return {
+      id: `act_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      textbookId,
+      title: cleanTitle(a.title || 'Untitled Activity'),
+      question: a.question,
+      chapter: a.chapter || null,
+      topic: a.topic || null,
+      type: a.type as 'QA' | 'MCQ' | 'PRACTICE',
+      difficulty: a.difficulty || 'medium', // Default to medium if unknown
+      pageNumber: a.pageNumber || null,
+      status: 'PENDING'
+    };
+  });
 };
 
 // --- Activity Grading ---

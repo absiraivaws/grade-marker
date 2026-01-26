@@ -1,5 +1,5 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { Camera, X, Check, RefreshCw } from 'lucide-react';
+import { Camera, X, Check, RefreshCw, CheckCircle } from 'lucide-react';
 
 interface WebcamScannerProps {
   onCapture: (imageData: string) => void;
@@ -344,6 +344,11 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
     }
   };
 
+  const handleSaveAndFinish = () => {
+    handleConfirm();
+    onClose();
+  };
+
   if (!isActive) return null;
 
   return (
@@ -523,6 +528,16 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
                       <Check className="w-8 h-8" />
                     </div>
                     <span className="text-xs font-bold uppercase tracking-wider shadow-black drop-shadow-md">Identify</span>
+                  </button>
+
+                  <button
+                    onClick={handleSaveAndFinish}
+                    className="flex flex-col items-center text-white gap-2 hover:opacity-80 transition-opacity"
+                  >
+                    <div className="p-4 bg-indigo-600 rounded-full backdrop-blur-md shadow-lg shadow-indigo-900/50 border border-white/20">
+                      <CheckCircle className="w-8 h-8" />
+                    </div>
+                    <span className="text-xs font-bold uppercase tracking-wider shadow-black drop-shadow-md">Save & Finish</span>
                   </button>
                 </>
               )}
