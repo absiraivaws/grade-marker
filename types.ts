@@ -133,6 +133,7 @@ export interface GeneratedNote {
   groupId?: string;
 }
 
+
 export interface NoteCorrection {
   id: string;
   originalContent: string;
@@ -142,4 +143,44 @@ export interface NoteCorrection {
   timestamp: number;
   teacherId: string;
   createdAt?: number; // DB timestamp
+}
+
+// --- Continuous Learning ---
+
+export interface Textbook {
+  id: string;
+  studentId: string;
+  title: string;
+  subjectId: string;
+  fileUrl: string;
+  uploadedAt: number;
+  status: 'PROCESSING' | 'READY' | 'ERROR';
+  pageCount?: number;
+}
+
+export interface LearningActivity {
+  id: string;
+  textbookId: string;
+  title?: string; // e.g. "Exercise 1.1" or "Question 5"
+  chapter?: string;
+  topic?: string;
+  question: string;
+  type: 'QA' | 'MCQ' | 'PRACTICE';
+  difficulty?: 'easy' | 'medium' | 'hard';
+  pageNumber?: number;
+  status?: 'PENDING' | 'COMPLETED'; // Local UI state mainly
+}
+
+export interface ActivitySubmission {
+  id: string;
+  activityId: string;
+  studentId: string;
+  answerImageUrls: string[];
+  score?: number;
+  maxScore?: number;
+  feedback?: string;
+  isCorrect?: boolean;
+  submittedAt: number;
+  attempts: number;
+  status: 'SUBMITTED' | 'GRADED';
 }

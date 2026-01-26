@@ -5,7 +5,7 @@ import {
   updateDoc, arrayUnion, serverTimestamp, deleteDoc, arrayRemove, deleteField
 } from 'firebase/firestore';
 import { db, firebaseConfig } from './firebase';
-import { School, Teacher, Grade, Class, Subject, Student, AssignedSubject, UserRole, Assignment, Submission, NoteCorrection, GeneratedNote } from '../types';
+import { School, Teacher, Grade, Class, Subject, Student, AssignedSubject, UserRole, Assignment, Submission, NoteCorrection, GeneratedNote, Textbook, LearningActivity, ActivitySubmission } from '../types';
 
 // Secondary app for creating users without signing out the current one
 const secondaryApp = getApps().find(a => a.name === 'Secondary') || initializeApp(firebaseConfig, "Secondary");
@@ -471,5 +471,75 @@ export const dbService = {
         } as GeneratedNote;
       })
       .sort((a, b) => b.updatedAt - a.updatedAt);
+  },
+
+  // --- Continuous Learning ---
+
+  // Textbooks
+  async saveTextbook(adminId: string, textbook: Textbook) {
+    const docRef = doc(getNestedColl(adminId, 'textbooks'), textbook.id);
+    await setDoc(docRef, textbook);
+  },
+
+  async getTextbooks(adminId: string, studentId: string): Promise<Textbook[]> {
+    const q = query(
+      getNestedColl(adminId, 'textbooks'),
+      where('studentId', '==', studentId)
+    );
+    const snap = await getDocs(q);
+    return snap.docs
+      .map(d => d.data() as Textbook)
+      .sort((a, b) => b.uploadedAt - a.uploadedAt);
+  },
+
+  async deleteTextbook(adminId: string, textbookId: string) {
+    await deleteDoc(doc(getNestedColl(adminId, 'textbooks'), textbookId));
+
+    // Also cleanup learning activities (optional but good practice)
+    const q = query(getNestedColl(adminId, 'learningActivities'), where('textbookId', '==', textbookId));
+    const snap = await getDocs(q);
+    const batch = (await import('firebase/firestore')).writeBatch(db);
+    snap.docs.forEach(d => batch.delete(d.ref));
+    await batch.commit();
+  },
+
+  // Activities
+  async saveExtractedActivities(adminId: string, activities: LearningActivity[]) {
+    // Uses batch write for efficiency
+    const { writeBatch, doc } = await import('firebase/firestore');
+    const batch = writeBatch(db);
+
+    activities.forEach(activity => {
+      const docRef = doc(getNestedColl(adminId, 'learningActivities'), activity.id);
+      batch.set(docRef, activity);
+    });
+
+    await batch.commit();
+  },
+
+  async getActivitiesForTextbook(adminId: string, textbookId: string): Promise<LearningActivity[]> {
+    const q = query(
+      getNestedColl(adminId, 'learningActivities'),
+      where('textbookId', '==', textbookId)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map(d => d.data() as LearningActivity);
+  },
+
+  // Activity Submissions
+  async saveActivitySubmission(adminId: string, submission: ActivitySubmission) {
+    const docRef = doc(getNestedColl(adminId, 'activitySubmissions'), submission.id);
+    await setDoc(docRef, submission);
+  },
+
+  async getActivitySubmissions(adminId: string, studentId: string): Promise<ActivitySubmission[]> {
+    const q = query(
+      getNestedColl(adminId, 'activitySubmissions'),
+      where('studentId', '==', studentId)
+    );
+    const snap = await getDocs(q);
+    return snap.docs
+      .map(d => d.data() as ActivitySubmission)
+      .sort((a, b) => b.submittedAt - a.submittedAt);
   }
 };

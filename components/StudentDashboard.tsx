@@ -4,6 +4,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { Assignment, Submission } from '../types';
 import { analyzeAnswer } from '../services/geminiService';
 import { dbService } from '../services/dbService';
+import ContinuousLearning from './ContinuousLearning';
 
 interface Props {
   studentId: string;
@@ -322,6 +323,8 @@ const StudentDashboard: React.FC<Props> = ({ studentId, adminId, classId }) => {
             </div>
           </div>
         } />
+
+        <Route path="/continuous-learning" element={<ContinuousLearning studentId={studentId} adminId={adminId} />} />
 
         <Route path="*" element={<Navigate to="/student" replace />} />
       </Routes>
