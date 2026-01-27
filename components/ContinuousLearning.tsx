@@ -99,97 +99,118 @@ const ContinuousLearning: React.FC<Props> = ({ studentId, adminId }) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Create temporary ID for tracking
+    const tempId = Date.now().toString();
+
+    // 1. Immediate UI Feedback: Add temp book
+    const tempBook: Textbook = {
+      id: tempId,
+      studentId,
+      title: file.name.replace('.pdf', ''),
+      subjectId: 'generic',
+      fileUrl: '', // Will be updated after upload
+      uploadedAt: Date.now(),
+      status: 'PROCESSING'
+    };
+
+    setTextbooks(prev => [tempBook, ...prev]);
     setIsUploading(true);
+
     try {
-      // 1. Upload File
-      const path = `textbooks/${studentId}/${Date.now()}_${file.name}`;
+      // 2. Upload File
+      const path = `textbooks/${studentId}/${tempId}_${file.name}`;
       const url = await dbService.uploadImage(file, path);
 
-      // 2. Create Textbook Record
-      const newBook: Textbook = {
-        id: Date.now().toString(),
-        studentId,
-        title: file.name.replace('.pdf', ''),
-        subjectId: 'generic', // Could be prompted
-        fileUrl: url,
-        uploadedAt: Date.now(),
-        status: 'PROCESSING'
-      };
-      await dbService.saveTextbook(adminId, newBook);
+      // 3. Update Textbook Record with URL
+      // (We don't save to DB yet to avoid partial records if extraction fails, 
+      // but we update the object for the next step)
+      tempBook.fileUrl = url;
+      // We can save the "Processing" state to DB now if we want persistence across reloads,
+      // but for "immediate feedback" local state is key. Let's save it to be safe.
+      await dbService.saveTextbook(adminId, tempBook);
 
-      // 3. Trigger Extraction (Client-side for now, ideally backend function)
-      // Convert to base64 for Gemini
+      // 4. Trigger Extraction
       const reader = new FileReader();
       reader.onloadend = async () => {
         const base64 = reader.result as string;
         try {
-          const extractedActs = await extractActivitiesFromTextbook(base64, newBook.id);
-          // Updated: Pass studentId (newBook.studentId is same as scope studentId)
-          await dbService.saveExtractedActivities(adminId, newBook.studentId, extractedActs);
+          const extractedActs = await extractActivitiesFromTextbook(base64, tempBook.id);
+          await dbService.saveExtractedActivities(adminId, tempBook.studentId, extractedActs);
 
-          // Update local state
-          newBook.status = 'READY';
-          newBook.totalActivities = extractedActs.length;
-          await dbService.saveTextbook(adminId, newBook);
-          setTextbooks(prev => [newBook, ...prev]);
+          // Update to READY
+          const readyBook = { ...tempBook, status: 'READY' as const, totalActivities: extractedActs.length };
+          await dbService.saveTextbook(adminId, readyBook);
+
+          setTextbooks(prev => prev.map(b => b.id === tempId ? readyBook : b));
           alert(`Success! Extracted ${extractedActs.length} activities.`);
         } catch (err) {
           console.error("Extraction failed", err);
-          newBook.status = 'ERROR';
-          await dbService.saveTextbook(adminId, newBook);
-          alert("Failed to extract activities. Pleas try a shorter PDF. Error: " + (err as Error).message);
+          const errorBook = { ...tempBook, status: 'ERROR' as const };
+          await dbService.saveTextbook(adminId, errorBook);
+          setTextbooks(prev => prev.map(b => b.id === tempId ? errorBook : b));
+          alert("Failed to extract activities. Please try a shorter PDF. Error: " + (err as Error).message);
         }
       };
       reader.readAsDataURL(file);
 
     } catch (err) {
       console.error(err);
+      // Remove or mark error
+      setTextbooks(prev => prev.filter(b => b.id !== tempId));
       alert("Upload failed");
     } finally {
       setIsUploading(false);
     }
+
   };
 
   const handleTextbookCapture = async (imgSrc: string) => {
     // Keep scanner open for multiple pages
     // setShowTextbookScanner(false); 
+
+    const tempId = Date.now().toString();
+    const tempBook: Textbook = {
+      id: tempId,
+      studentId,
+      title: `Scanned Page ${new Date().toLocaleTimeString()}`,
+      subjectId: 'generic',
+      fileUrl: '',
+      uploadedAt: Date.now(),
+      status: 'PROCESSING'
+    };
+
+    // Immediate UI update
+    setTextbooks(prev => [tempBook, ...prev]);
     setIsUploading(true);
+
     try {
       // 1. Upload Image
       const res = await fetch(imgSrc);
       const blob = await res.blob();
       const file = new File([blob], `scanned_textbook_${Date.now()}.jpg`, { type: 'image/jpeg' });
 
-      const path = `textbooks/${studentId}/${Date.now()}_scanned.jpg`;
+      const path = `textbooks/${studentId}/${tempId}_scanned.jpg`;
       const url = await dbService.uploadImage(file, path);
 
-      // 2. Create Textbook Record
-      const newBook: Textbook = {
-        id: Date.now().toString(),
-        studentId,
-        title: `Scanned Page ${new Date().toLocaleTimeString()}`,
-        subjectId: 'generic',
-        fileUrl: url,
-        uploadedAt: Date.now(),
-        status: 'PROCESSING'
-      };
-      await dbService.saveTextbook(adminId, newBook);
+      tempBook.fileUrl = url;
+      await dbService.saveTextbook(adminId, tempBook);
 
-      // 3. Trigger Extraction
-      // imgSrc is already base64
-      const extractedActs = await extractActivitiesFromTextbook(imgSrc, newBook.id);
-      await dbService.saveExtractedActivities(adminId, newBook.studentId, extractedActs);
+      // 2. Trigger Extraction
+      const extractedActs = await extractActivitiesFromTextbook(imgSrc, tempBook.id);
+      await dbService.saveExtractedActivities(adminId, tempBook.studentId, extractedActs);
 
-      // Update local state
-      newBook.status = 'READY';
-      newBook.totalActivities = extractedActs.length;
-      await dbService.saveTextbook(adminId, newBook);
-      setTextbooks(prev => [newBook, ...prev]);
+      // Update local state to READY
+      const readyBook = { ...tempBook, status: 'READY' as const, totalActivities: extractedActs.length };
+      await dbService.saveTextbook(adminId, readyBook);
+
+      setTextbooks(prev => prev.map(b => b.id === tempId ? readyBook : b));
       alert(`Success! Extracted ${extractedActs.length} activities.`);
 
     } catch (err) {
       console.error("Scanning failed", err);
-      // Create error backend record if needed, or just alert
+      const errorBook = { ...tempBook, status: 'ERROR' as const };
+      await dbService.saveTextbook(adminId, errorBook);
+      setTextbooks(prev => prev.map(b => b.id === tempId ? errorBook : b));
       alert("Failed to process scanned page: " + (err as Error).message);
     } finally {
       setIsUploading(false);
@@ -315,9 +336,9 @@ const ContinuousLearning: React.FC<Props> = ({ studentId, adminId }) => {
                     loadActivities(book);
                     setView('ACTIVITIES');
                   }
-                }} className={`group relative bg-white dark:bg-slate-800 p-6 rounded-[2rem] border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-xl transition-all ${book.status !== 'READY' ? 'opacity-75 cursor-not-allowed' : 'cursor-pointer hover:-translate-y-1'}`}>
+                }} className={`group relative bg-white dark:bg-slate-800 p-6 rounded-[2rem] border border-slate-200 dark:border-slate-700 shadow-sm transition-all ${book.status === 'PROCESSING' ? 'animate-pulse border-indigo-300' : 'hover:shadow-xl'} ${book.status !== 'READY' ? 'opacity-75 cursor-not-allowed' : 'cursor-pointer hover:-translate-y-1'}`}>
                   <div className="absolute top-4 right-4">
-                    {book.status === 'PROCESSING' && <span className="bg-yellow-100 text-yellow-700 text-[10px] font-black uppercase px-2 py-1 rounded">Processing</span>}
+                    {book.status === 'PROCESSING' && <span className="bg-indigo-100 text-indigo-700 text-[10px] font-black uppercase px-2 py-1 rounded flex items-center gap-1"><span className="animate-spin">⏳</span> Processing</span>}
                     {book.status === 'READY' && <span className="bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase px-2 py-1 rounded">Ready</span>}
                     {book.status === 'ERROR' && <span className="bg-red-100 text-red-700 text-[10px] font-black uppercase px-2 py-1 rounded">Error</span>}
                   </div>
