@@ -5,7 +5,7 @@ import {
   updateDoc, arrayUnion, serverTimestamp, deleteDoc, arrayRemove, deleteField
 } from 'firebase/firestore';
 import { db, firebaseConfig } from './firebase';
-import { School, Teacher, Grade, Class, Subject, Student, AssignedSubject, UserRole, Assignment, Submission, NoteCorrection, GeneratedNote } from '../types';
+import { School, Teacher, Grade, Class, Subject, Student, AssignedSubject, UserRole, Assignment, Submission, NoteCorrection, GeneratedNote, Textbook, LearningActivity, ActivitySubmission } from '../types';
 
 // Secondary app for creating users without signing out the current one
 const secondaryApp = getApps().find(a => a.name === 'Secondary') || initializeApp(firebaseConfig, "Secondary");
@@ -471,5 +471,84 @@ export const dbService = {
         } as GeneratedNote;
       })
       .sort((a, b) => b.updatedAt - a.updatedAt);
+  },
+
+  // --- Continuous Learning ---
+
+  // Textbooks
+  async saveTextbook(adminId: string, textbook: Textbook) {
+    // New Path: users/{adminId}/students/{studentId}/textbooks/{textbookId}
+    const docRef = doc(db, 'users', adminId, 'students', textbook.studentId, 'textbooks', textbook.id);
+    await setDoc(docRef, textbook);
+  },
+
+  async getTextbooks(adminId: string, studentId: string): Promise<Textbook[]> {
+    // New Path: users/{adminId}/students/{studentId}/textbooks
+    const textbooksRef = collection(db, 'users', adminId, 'students', studentId, 'textbooks');
+    const q = query(textbooksRef); // No need for 'where studentId' as it's implied by path
+
+    const snap = await getDocs(q);
+    return snap.docs
+      .map(d => d.data() as Textbook)
+      .sort((a, b) => b.uploadedAt - a.uploadedAt);
+  },
+
+  async deleteTextbook(adminId: string, studentId: string, textbookId: string) {
+    await deleteDoc(doc(db, 'users', adminId, 'students', studentId, 'textbooks', textbookId));
+  },
+
+  // Activities (Subcollection of Textbook)
+  // Required: adminId, studentId (to find path), textbookId
+  async saveExtractedActivities(adminId: string, studentId: string, activities: LearningActivity[]) {
+    const { writeBatch, doc, collection } = await import('firebase/firestore');
+    const batch = writeBatch(db);
+
+    activities.forEach(activity => {
+      // New Path: users/{adminId}/students/{studentId}/textbooks/{textbookId}/activities/{activityId}
+      const textbookId = activity.textbookId;
+      const activitiesRef = collection(db, 'users', adminId, 'students', studentId, 'textbooks', textbookId, 'activities');
+      const docRef = doc(activitiesRef, activity.id);
+      batch.set(docRef, activity);
+    });
+
+    await batch.commit();
+  },
+
+  async getActivitiesForTextbook(adminId: string, studentId: string, textbookId: string): Promise<LearningActivity[]> {
+    const { collection } = await import('firebase/firestore');
+    // New Path: users/{adminId}/students/{studentId}/textbooks/{textbookId}/activities
+    const activitiesRef = collection(db, 'users', adminId, 'students', studentId, 'textbooks', textbookId, 'activities');
+    const q = await getDocs(activitiesRef);
+    return q.docs.map(d => d.data() as LearningActivity);
+  },
+
+  // Activity Submissions
+  // Path: users/{adminId}/students/{studentId}/textbooks/{textbookId}/submissions/{submissionId}
+  async saveActivitySubmission(adminId: string, submission: ActivitySubmission) {
+    if (!submission.textbookId) {
+      console.error("Cannot save submission without textbookId in new structure");
+      throw new Error("Textbook ID required for submission");
+    }
+
+    const { collection } = await import('firebase/firestore');
+    const submissionsRef = collection(db, 'users', adminId, 'students', submission.studentId, 'textbooks', submission.textbookId, 'submissions');
+    const docRef = doc(submissionsRef, submission.id);
+
+    await setDoc(docRef, submission);
+  },
+
+  async getActivitySubmissions(adminId: string, studentId: string): Promise<ActivitySubmission[]> {
+    // Collection Group Query remains effective here as we still want "all submissions for this student"
+    // regardless of which textbook they are buried in.
+    const { collectionGroup } = await import('firebase/firestore');
+    const q = query(
+      collectionGroup(db, 'submissions'),
+      where('studentId', '==', studentId)
+    );
+
+    const snap = await getDocs(q);
+    return snap.docs
+      .map(d => d.data() as ActivitySubmission)
+      .sort((a, b) => b.submittedAt - a.submittedAt);
   }
 };

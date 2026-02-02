@@ -192,6 +192,7 @@ const DashboardLayout: React.FC<{ user: User, role: UserRole, children: React.Re
               <>
                 <NavTab to="/student" label="My Tasks" icon="📥" end />
                 <NavTab to="/student/grades" label="My Grades" icon="🏆" />
+                <NavTab to="/student/continuous-learning" label="Practice" icon="📖" />
               </>
             )}
           </div>
