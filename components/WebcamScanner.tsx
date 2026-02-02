@@ -77,7 +77,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
       if (!videoRef.current || !canvasRef.current) return;
       const video = videoRef.current;
       const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
       if (!ctx || video.readyState !== 4) return;
 
@@ -300,6 +300,47 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
     };
   }, [isActive, selectedDeviceId]); // Re-run if selectedDeviceId changes
 
+  const speak = (text: string) => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel(); // Cancel previous
+
+      const attemptSpeak = () => {
+        const voices = window.speechSynthesis.getVoices();
+        const utterance = new SpeechSynthesisUtterance(text);
+
+        // Try to find English voice, or fallback to first available
+        const voice = voices.find(v => v.lang.startsWith('en')) || voices[0];
+        if (voice) {
+          utterance.voice = voice;
+          console.log(`TTS using voice: ${voice.name} (${voice.lang})`);
+        } else {
+          console.warn('TTS: No voices found yet');
+        }
+
+        utterance.volume = 1;
+        utterance.rate = 1;
+        utterance.pitch = 1;
+
+        utterance.onstart = () => console.log('TTS Started');
+        utterance.onend = () => console.log('TTS Ended');
+        utterance.onerror = (e) => console.error('TTS Error:', e);
+
+        window.speechSynthesis.speak(utterance);
+      };
+
+      // If voices aren't loaded, wait a bit (or rely on the previous effect, but let's be safe at call time too)
+      if (window.speechSynthesis.getVoices().length === 0) {
+        console.log('TTS: Waiting for voices...');
+        attemptSpeak();
+      } else {
+        attemptSpeak();
+      }
+
+    } else {
+      console.warn('Text-to-speech not supported');
+    }
+  };
+
   const handleCapture = () => {
     if (videoRef.current && canvasRef.current) {
       const video = videoRef.current;
@@ -308,11 +349,12 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
 
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (ctx) {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
         setCapturedImage(dataUrl);
+        speak('Captured');
       }
     }
   };

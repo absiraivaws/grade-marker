@@ -1,5 +1,5 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
+import { PDFDocument } from 'pdf-lib';
 import { LearningActivity, ActivitySubmission } from "../types";
 
 const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
@@ -9,17 +9,46 @@ const getMimeType = (base64: string): string => {
   return match ? match[1] : "application/pdf";
 };
 
-// --- Textbook Extraction ---
+// Helper to repair truncated JSON arrays
+const tryParseJSON = (text: string) => {
+  // 1. Clean Markdown and whitespace
+  let cleaned = text.replace(/```json\s*|\s*```/g, "").trim();
+  if (cleaned.startsWith('json')) cleaned = cleaned.slice(4).trim();
 
-export const extractActivitiesFromTextbook = async (
-  textbookBase64: string,
-  textbookId: string
-): Promise<LearningActivity[]> => {
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    console.warn("Standard JSON parse failed, attempting repair...", (e as Error).message);
+
+    // 2. Try to repair truncated array (assuming valid objects were closed)
+    // We look for the last '}', which implies the end of the last complete object.
+    const lastBrace = cleaned.lastIndexOf('}');
+
+    if (lastBrace !== -1) {
+      // Keep everything up to the last object
+      let repaired = cleaned.substring(0, lastBrace + 1);
+      // Close the array
+      repaired += "]";
+
+      try {
+        const result = JSON.parse(repaired);
+        console.log(`Successfully repaired JSON. Recovered ${result.length} items.`);
+        return result;
+      } catch (e2) {
+        console.error("JSON repair failed:", (e2 as Error).message);
+      }
+    }
+
+    // Fail safe: return empty array to prevent app crash
+    return [];
+  }
+};
+
+const _extractChunk = async (chunkBase64: string, chunkIndex: number): Promise<any[]> => {
   const ai = getAI();
-
   const prompt = `
     You are an expert educational content extractor.
-    Analyze the provided textbook content (PDF or Image).
+    Analyze the provided PDF chunk (Part ${chunkIndex + 1}).
 
     CRITICAL INSTRUCTION: GROUPING
     - Look for "Exercise" headings (e.g., "Exercise 1.1", "Exercise 3.4", "Questions").
@@ -45,65 +74,111 @@ export const extractActivitiesFromTextbook = async (
 
   const pdfPart = {
     inlineData: {
-      mimeType: getMimeType(textbookBase64),
-      data: textbookBase64.split(',')[1]
+      mimeType: "application/pdf",
+      data: chunkBase64
     }
   };
 
-  const response = await ai.models.generateContent({
-    model: "gemini-2.0-flash-exp",
-    contents: {
-      parts: [
-        { text: prompt },
-        pdfPart
-      ]
-    },
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            title: { type: Type.STRING },
-            question: { type: Type.STRING },
-            chapter: { type: Type.STRING },
-            topic: { type: Type.STRING },
-            type: { type: Type.STRING, enum: ['QA', 'MCQ', 'PRACTICE'] },
-            difficulty: { type: Type.STRING, enum: ['easy', 'medium', 'hard'] },
-            pageNumber: { type: Type.INTEGER }
-          },
-          required: ["question", "type"]
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.0-flash-exp",
+      contents: {
+        parts: [{ text: prompt }, pdfPart]
+      },
+      config: {
+        responseMimeType: "application/json",
+        maxOutputTokens: 8192,
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              title: { type: Type.STRING },
+              question: { type: Type.STRING },
+              chapter: { type: Type.STRING },
+              topic: { type: Type.STRING },
+              type: { type: Type.STRING, enum: ['QA', 'MCQ', 'PRACTICE'] },
+              difficulty: { type: Type.STRING, enum: ['easy', 'medium', 'hard'] },
+              pageNumber: { type: Type.INTEGER }
+            },
+            required: ["question", "type"]
+          }
         }
       }
+    });
+
+    return tryParseJSON(response.text || "[]");
+  } catch (error) {
+    console.warn(`Failed to extract chunk ${chunkIndex}`, error);
+    return [];
+  }
+};
+
+export const extractActivitiesFromTextbook = async (
+  textbookBase64: string,
+  textbookId: string
+): Promise<LearningActivity[]> => {
+  const CHUNK_SIZE = 20; // Process 20 pages at a time
+
+  try {
+    // 1. Load PDF
+    const safeBase64 = textbookBase64.includes(',') ? textbookBase64.split(',')[1] : textbookBase64;
+    // pdf-lib requires Uint8Array for cleaner loading of large files usually, but base64 string works too
+    const pdfDoc = await PDFDocument.load(safeBase64);
+    const totalPages = pdfDoc.getPageCount();
+
+    console.log(`Splitting ${totalPages} pages into chunks of ${CHUNK_SIZE}...`);
+
+    let allRawActivities: any[] = [];
+
+    // 2. Loop through chunks
+    for (let i = 0; i < totalPages; i += CHUNK_SIZE) {
+      const end = Math.min(i + CHUNK_SIZE, totalPages);
+      console.log(`Processing chunk pages ${i + 1} to ${end}`);
+
+      // Create new sub-document
+      const subDoc = await PDFDocument.create();
+      // Copy pages (indices are 0-based)
+      const pageIndices = Array.from({ length: end - i }, (_, k) => i + k);
+      const copiedPages = await subDoc.copyPages(pdfDoc, pageIndices);
+
+      copiedPages.forEach(page => subDoc.addPage(page));
+
+      const chunkBase64 = await subDoc.saveAsBase64();
+
+      // Extract from this chunk
+      const chunkActivities = await _extractChunk(chunkBase64, i / CHUNK_SIZE);
+      console.log(`Chunk ${i / CHUNK_SIZE} extracted ${chunkActivities.length} activities.`);
+
+      allRawActivities = [...allRawActivities, ...chunkActivities];
     }
-  });
 
-  const text = response.text || "[]";
-  const rawActivities = JSON.parse(text);
+    // 3. Map to Interface (with deduplication if needed, but sequential chunks usually distinct)
+    return allRawActivities.map((a: any) => {
+      const cleanTitle = (t: string) => {
+        // Remove any description after a colon or " - "
+        // e.g. "Exercise 1.1: Intro" -> "Exercise 1.1"
+        return t.split(/[:\–\—]/)[0].trim();
+      };
 
-  // Map to LearningActivity interface
-  // Map to LearningActivity interface
-  return rawActivities.map((a: any) => {
-    const cleanTitle = (t: string) => {
-      // Remove any description after a colon or " - "
-      // e.g. "Exercise 1.1: Intro" -> "Exercise 1.1"
-      return t.split(/[:\–\—]/)[0].trim();
-    };
+      return {
+        id: `act_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        textbookId,
+        title: cleanTitle(a.title || 'Untitled Activity'),
+        question: a.question,
+        chapter: a.chapter || null,
+        topic: a.topic || null,
+        type: a.type as 'QA' | 'MCQ' | 'PRACTICE',
+        difficulty: a.difficulty || 'medium',
+        pageNumber: a.pageNumber || null,
+        status: 'PENDING'
+      };
+    });
 
-    return {
-      id: `act_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      textbookId,
-      title: cleanTitle(a.title || 'Untitled Activity'),
-      question: a.question,
-      chapter: a.chapter || null,
-      topic: a.topic || null,
-      type: a.type as 'QA' | 'MCQ' | 'PRACTICE',
-      difficulty: a.difficulty || 'medium', // Default to medium if unknown
-      pageNumber: a.pageNumber || null,
-      status: 'PENDING'
-    };
-  });
+  } catch (err) {
+    console.error("PDF Chunking/Extraction failed:", err);
+    throw err;
+  }
 };
 
 // --- Activity Grading ---
